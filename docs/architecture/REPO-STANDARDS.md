@@ -19,6 +19,8 @@ BlockNet/
 ├── CHANGELOG.md            # one entry per release, Keep-a-Changelog format
 ├── CONTRIBUTING.md         # how to run the F5 dev host, how tests work, PR expectations
 ├── .github/{workflows/ci.yml, dependabot.yml}
+├── .githooks/pre-push     # installed via package.json's `prepare` script
+                            # (`git config core.hooksPath .githooks`) — see below
 ├── .vscode/{launch.json, extensions.json}
 ├── docs/
 ├── core/
@@ -49,16 +51,29 @@ may exist on disk — it's `.gitignore`d and never committed, linted, built, or 
   keystroke, so its budget is looser; code-split only if it actually grows past a size that
   makes first paint sluggish.
 
-## CI — one pipeline, four gates
+## CI — one pipeline, five gates
 
-`npm ci` (cached) → `build --workspaces` → `test --workspaces` → `lint`. All four block
-merge. `no-vscode-import.test.ts` runs inside `test`, not as a separate step — it's a unit
-test, not a special case.
+`npm ci` (cached) → `build --workspaces` → `typecheck --workspaces` → `test --workspaces` →
+`lint`. All five block merge. `typecheck` (`tsc --noEmit`) is separate from `build`
+deliberately: `build` (tsup) only compiles what's reachable from `core`'s declared
+entrypoints, so a file not yet wired into anything can carry a type error and still pass
+`build` clean — `typecheck` has no such blind spot, since it type-checks everything
+`tsconfig.json` includes. `no-vscode-import.test.ts` runs inside `test`, not as a separate
+step — it's a unit test, not a special case.
+
+The same five gates run locally before a push leaves the machine, not just in CI: `.githooks/
+pre-push`, installed by `package.json`'s `prepare` script (`git config core.hooksPath
+.githooks` — no hook-management dependency, git's own mechanism). Bypassable with `git push
+--no-verify`, deliberately, same as any git hook.
 
 ## What "premium" explicitly does not mean here
 
 No changesets/monorepo-release tooling (single extension ships as one version; `core` is
-not independently published in v1), no commit-message linting or git hooks (process
-overhead the plan didn't ask for), no telemetry (banned outright, see
-[decisions/0010](../decisions/0010-free-oss-distribution.md)). Premium means disciplined
-and small, not maximal tooling.
+not independently published in v1), no commit-message linting (conventional-commits style
+enforcement — still process overhead the plan didn't ask for), no telemetry (banned
+outright, see [decisions/0010](../decisions/0010-free-oss-distribution.md)). The one
+deliberate exception to "no git hooks" is `pre-push`: it runs nothing the CI pipeline
+doesn't already run, exists to catch a real failure mode before it costs a CI round-trip
+(see `typecheck` above), and stays a single small script — not husky, not lint-staged, not
+commit-message enforcement. Premium means disciplined and small, not maximal tooling; one
+gate mirroring CI locally is still small.

@@ -21,8 +21,11 @@ BlockNet/
 │   ├── launch.json                   # F5 = Extension Development Host, pointed at a real repo
 │   └── extensions.json
 ├── .github/
-│   ├── workflows/ci.yml              # npm ci && build --workspaces && test --workspaces && lint
+│   ├── workflows/ci.yml              # npm ci && build && typecheck && test (all --workspaces) && lint
 │   └── dependabot.yml
+├── .githooks/
+│   └── pre-push                      # same five gates, run locally before push — see
+│                                      #   REPO-STANDARDS.md's "CI — one pipeline, five gates"
 │
 ├── docs/                             # see docs/README.md for the taxonomy
 │
@@ -42,13 +45,18 @@ BlockNet/
 │   │   │
 │   │   ├── blocks/                   # LAYER 1 — block auto-detection
 │   │   │   ├── detect.ts             # cascade entry point; first non-empty strategy wins.
-│   │   │   │                         #   Always appends one synthetic "(root)" catch-all
-│   │   │   │                         #   block, populated only if resolve-block.ts finds
-│   │   │   │                         #   files matching no detected block's path prefix.
+│   │   │   │                         #   Does NOT append the synthetic "(root)" catch-all
+│   │   │   │                         #   block itself — detect.ts never walks files, so it
+│   │   │   │                         #   can't know one is needed. analyze.ts appends it
+│   │   │   │                         #   conditionally once edges/resolve-block.ts (Task 3)
+│   │   │   │                         #   finds a file matching no detected block's prefix.
 │   │   │   ├── workspaces.ts         # strategy 1: package.json workspaces / tsconfig refs
 │   │   │   ├── conventional.ts       # strategy 2: apps/ packages/ services/ libs/ infra/
 │   │   │   ├── flat-fallback.ts      # strategy 3: top-level folders under src/
-│   │   │   └── pills.ts              # tech-pill derivation from each block's own package.json
+│   │   │   ├── pills.ts              # tech-pill derivation from each block's own package.json
+│   │   │   ├── fs-utils.ts           # shared symlink-following directory listing +
+│   │   │   │                         #   rootDir-containment guard, used by all 3 strategies
+│   │   │   └── internal-types.ts     # BlockCandidate — pre-pills shape strategies return
 │   │   │
 │   │   ├── edges/                    # LAYER 1 — import truth
 │   │   │   ├── depcruise-runner.ts   # invokes dependency-cruiser's in-process API; binding
@@ -83,12 +91,21 @@ BlockNet/
 │   │
 │   └── test/
 │       ├── no-vscode-import.test.ts  # greps core/src for `from 'vscode'`
+│       ├── log.test.ts
 │       ├── fixtures/
-│       │   ├── monorepo/             # npm-workspaces fixture: packages/a,b,c — b↔c is a
-│       │   │   └── ...               #   deliberate cycle; a deep-imports c/src/internal
+│       │   ├── monorepo/             # npm-workspaces fixture: packages/a,b,c, each with a
+│       │   │   └── ...               #   real dependency for pill tests (react/express/pg).
+│       │   │                         #   The b↔c cycle / a-deep-imports-c/src/internal
+│       │   │                         #   content this fixture will also carry is Task 3/4's
+│       │   │                         #   to add, once cycle/boundary detection exists to
+│       │   │                         #   test against — not present yet.
 │       │   └── flat-repo/            # single-package fixture: src/{auth,api,ui}
 │       │       └── ...
-│       ├── blocks.test.ts
+│       ├── blocks.workspaces.test.ts
+│       ├── blocks.conventional.test.ts
+│       ├── blocks.flat-fallback.test.ts
+│       ├── blocks.pills.test.ts
+│       ├── blocks.detect.test.ts
 │       ├── edges.test.ts
 │       ├── risks.cycles.test.ts
 │       ├── risks.boundary.test.ts
