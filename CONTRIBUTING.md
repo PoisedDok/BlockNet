@@ -36,8 +36,25 @@ injects an internal tsconfig that sets `baseUrl`, so `npm run build --workspace=
 outright on TS 6. `.github/dependabot.yml` has a matching `ignore` rule so a major-version
 bump doesn't land unreviewed. Revisit once tsup/rollup-plugin-dts ships a fix.
 
+### Why `typecheck` is a separate script from `build`
+
+`npm run build` (tsup) only compiles what's actually reachable from `core`'s declared
+entrypoints (`index.ts`, `cli.ts`). A source file that exists but isn't imported by anything
+yet — or a type error on a branch tsup's bundler doesn't need to touch — can pass `build`
+while still being broken. `npm run typecheck` (`tsc --noEmit`) type-checks every file
+`tsconfig.json` includes, regardless of what's wired up yet. Both gates run in CI and in the
+local pre-push hook; `build` passing is not proof the code type-checks.
+
+## Git hooks
+
+`npm install` runs `prepare`, which points git at the committed `.githooks/` directory
+(`core.hooksPath`). `pre-push` then runs the same gate as CI — build, typecheck, test, lint —
+before a push leaves your machine. Bypass only deliberately with `git push --no-verify`, and
+only when you already know why; that flag defeats the point of the hook.
+
 ## Before opening a PR
 
-- `npm run build && npm test && npm run lint` all pass at the root.
+- `npm run build && npm run typecheck && npm test && npm run lint` all pass at the root
+  (the pre-push hook already enforces this, but re-run explicitly if you bypassed it).
 - Read [`CLAUDE.md`](CLAUDE.md) and the docs it points to before touching architecture or
   decisions — don't silently drift from a locked ADR; propose a superseding one instead.
