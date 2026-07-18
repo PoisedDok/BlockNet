@@ -23,13 +23,14 @@ BlockNet/
 ├── docs/
 ├── core/
 ├── extension/
-├── design_handoff_blocknet_extension/   # reference only, see docs/architecture/DIRECTORY-TREE.md
-└── agent-skills/                        # vendored agent tooling, not BlockNet source — never
-                                          #   linted, built, or shipped (excluded in eslint.config.js)
+└── design_handoff_blocknet_extension/   # reference only, see docs/architecture/DIRECTORY-TREE.md
 ```
 
 No stray config at root beyond this list. A new root-level file is a smell — it belongs in
 `core/`, `extension/`, or `docs/`.
+
+A local-only `agent-skills/` directory (vendored coding-agent tooling, not BlockNet source)
+may exist on disk — it's `.gitignore`d and never committed, linted, built, or shipped.
 
 ## Packaging discipline
 
