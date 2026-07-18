@@ -1,0 +1,19 @@
+#!/bin/sh
+# Same gate as CI (.github/workflows/ci.yml), run locally before the push leaves the
+# machine. Installed automatically by `npm install`'s `prepare` script (root package.json),
+# which points git at this directory via `core.hooksPath`. Bypass only deliberately, with
+# `git push --no-verify`, and only when you already know why (CONTRIBUTING.md) — this hook
+# existing is the whole point of "nothing broken is ever pushed."
+set -e
+
+echo "pre-push: build"
+npm run build --workspaces --if-present
+
+echo "pre-push: typecheck"
+npm run typecheck --workspaces --if-present
+
+echo "pre-push: test"
+npm test --workspaces --if-present
+
+echo "pre-push: lint"
+npm run lint
