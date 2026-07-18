@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    ignore:
+      # typescript is pinned <6.0.0: tsup 8.5.1's DTS bundler (rollup-plugin-dts) fails
+      # under TS 6.0's baseUrl-deprecation-as-error change. Revisit once tsup ships a fix
+      # (see CONTRIBUTING.md) — don't let this land as a silent auto-merge.
+      - dependency-name: 'typescript'
+        update-types: ['version-update:semver-major']
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'

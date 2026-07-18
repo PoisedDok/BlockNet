@@ -1,0 +1,11 @@
+node_modules/
+dist/
+
+# Vendored agent tooling — not BlockNet source, never committed (see REPO-STANDARDS.md)
+agent-skills/
+*.log
+npm-debug.log*
+.DS_Store
+*.vsix
+.vscode-test/
+coverage/

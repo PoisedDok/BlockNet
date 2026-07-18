@@ -1,0 +1,29 @@
+{
+  "name": "blocknet",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Render a TS/JS repo's block-level architecture graph inside a VS Code webview.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PoisedDok/BlockNet.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "core"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.7.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.64.0"
+  }
+}
