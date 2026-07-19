@@ -6,9 +6,10 @@
 // into the graph as if it were source, because the original list only named `dist`,
 // `build`, `out`, `coverage`. Every current or future framework's build/cache output
 // (`.next`, `.nuxt`, `.svelte-kit`, `.turbo`, `.cache`, `.vercel`, ...) is caught by the
-// same rule, and it matches blocks/fs-utils.ts's `listChildDirectories`, which already
-// excludes all dot-directories categorically for block detection — this keeps the two
-// halves of the pipeline from silently disagreeing about what counts as source.
+// same rule. The pattern itself lives in path-utils.ts's `EXCLUDE_PATTERN_SOURCE` — the
+// single shared definition also used by file-walk.ts's generic all-languages file inventory
+// and referenced by blocks/fs-utils.ts's `listChildDirectories` — so the pipeline's several
+// consumers of "what counts as source" can't silently drift apart from each other again.
 //
 // Path aliases (tsconfig `paths`) are resolved by BlockNet itself, not handed to
 // dependency-cruiser's own `tsConfig` cruise option: dependency-cruiser's
@@ -42,10 +43,8 @@ import { realpathSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { cruise, type ICruiseResult } from 'dependency-cruiser';
 import { createLogger, type Logger } from '../log.js';
-import { isWithinRoot } from '../path-utils.js';
+import { EXCLUDE_PATTERN_SOURCE, isWithinRoot } from '../path-utils.js';
 import { readTsconfigJsonc } from '../tsconfig-utils.js';
-
-const EXCLUDE_PATTERN = '(^|/)(node_modules|dist|build|out|coverage|\\.[^/]+)(/|$)';
 
 type TsconfigPaths = {
   compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> };
@@ -104,7 +103,7 @@ export async function runDependencyCruise(
     ['.'],
     {
       baseDir: realRootDir,
-      exclude: { path: EXCLUDE_PATTERN },
+      exclude: { path: EXCLUDE_PATTERN_SOURCE },
       tsPreCompilationDeps: true,
       outputType: 'json',
     },

@@ -43,20 +43,28 @@ describe('analyze — checked-in monorepo fixture (no root-level source files)',
     expect(result.edges.every((e) => e.source !== e.target)).toBe(true);
   });
 
-  it('sets each block\'s real fileCount from the walked file graph', async () => {
+  it('sets each block\'s real fileCount from the generic all-files walk — package.json ' +
+    'itself now counts too, not just TS/JS modules', async () => {
     const result = await analyze({ rootDir: fixture });
     const byPath = Object.fromEntries(result.blocks.map((b) => [b.path, b.fileCount]));
-    expect(byPath).toEqual({ 'packages/a': 2, 'packages/b': 2, 'packages/c': 2 });
+    // Each of packages/a,b,c has its own package.json + 2 .ts files = 3, not 2.
+    expect(byPath).toMatchObject({ 'packages/a': 3, 'packages/b': 3, 'packages/c': 3 });
   });
 
-  it('does not append a root block when every file matches a detected block', async () => {
+  it('appends the root block for the fixture\'s own root package.json + tsconfig.json — ' +
+    'real files that exist outside every workspace member, honestly counted now that ' +
+    'fileCount isn\'t limited to TS/JS modules', async () => {
     const result = await analyze({ rootDir: fixture });
-    expect(result.blocks.some((b) => b.id === ROOT_BLOCK_ID)).toBe(false);
+    const root = result.blocks.find((b) => b.id === ROOT_BLOCK_ID);
+    expect(root).toBeDefined();
+    expect(root?.fileCount).toBe(2); // root package.json + tsconfig.json
+    expect(root?.pills).toEqual([]); // fixture's root package.json declares no dependencies
   });
 
-  it('sets meta.fileCount to the total real files walked', async () => {
+  it('sets meta.fileCount to the total real files walked, any language, including each ' +
+    'workspace member\'s own package.json and the root\'s package.json + tsconfig.json', async () => {
     const result = await analyze({ rootDir: fixture });
-    expect(result.meta.fileCount).toBe(6);
+    expect(result.meta.fileCount).toBe(11); // 3 blocks x 3 files + root's 2 files
   });
 });
 
@@ -89,22 +97,29 @@ describe('analyze — root catch-all block', () => {
 
     const root = result.blocks.find((b) => b.id === ROOT_BLOCK_ID);
     expect(root).toBeDefined();
-    expect(root?.fileCount).toBe(1);
+    // root/package.json + root/shared.ts — both outside packages/a's prefix. Previously only
+    // shared.ts counted (package.json isn't a dependency-cruiser "module"); the generic walk
+    // counts both.
+    expect(root?.fileCount).toBe(2);
     expect(root?.pills).toEqual(['chalk']);
 
     const rootEdge = result.edges.find((e) => e.target === ROOT_BLOCK_ID);
     expect(rootEdge).toMatchObject({ source: 'packages/a', target: ROOT_BLOCK_ID, importCount: 1 });
   });
 
-  it('does not appear at all when every file matches a detected block', async () => {
+  it('still appends root for its own root-level package.json even when every SOURCE file ' +
+    'matches a detected block — the workspace declaration itself lives outside every ' +
+    'member\'s path prefix, and that\'s now honestly counted', async () => {
     const dir = createTempRepo();
     writeJson(resolve(dir, 'package.json'), { name: 'root-test', workspaces: ['packages/*'] });
     writeJson(resolve(dir, 'packages/a/package.json'), { name: 'a' });
     writeText(resolve(dir, 'packages/a/index.ts'), 'export {};\n');
 
     const result = await analyze({ rootDir: dir });
-    expect(result.blocks.some((b) => b.id === ROOT_BLOCK_ID)).toBe(false);
-    expect(result.edges).toEqual([]);
+    const root = result.blocks.find((b) => b.id === ROOT_BLOCK_ID);
+    expect(root).toBeDefined();
+    expect(root?.fileCount).toBe(1); // just the root's own package.json
+    expect(result.edges).toEqual([]); // no import ever crosses into root — no fabricated edge
   });
 
   it('never produces two BlockNodes with the same id, even if a real detected block\'s path collides with the root sentinel', async () => {
@@ -126,16 +141,18 @@ describe('analyze — root catch-all block', () => {
 });
 
 describe('analyze — core-module imports', () => {
-  it('does not count a Node core module (e.g. "node:fs") as a real file in fileCount or a block\'s fileCount', async () => {
+  it('does not count a Node core module (e.g. "node:fs") as a real file in fileCount — it was ' +
+    'never a real file on disk, so the generic file walk never sees it in the first place', async () => {
     const dir = createTempRepo();
     writeJson(resolve(dir, 'package.json'), { name: 'core-module-test' });
     writeText(dir + '/src/index.ts', "import fs from 'node:fs';\nconsole.log(fs);\n");
 
     const result = await analyze({ rootDir: dir });
-    // Only src/index.ts itself is a real file — dependency-cruiser also reports the core
-    // module as its own phantom module entry, which must not be counted.
-    expect(result.meta.fileCount).toBe(1);
-    expect(result.blocks.every((b) => b.fileCount === 1)).toBe(true);
+    // Two real files exist on disk: the root package.json and src/index.ts. No block is
+    // detected (no workspaces field, no host under src/, src/ itself has no subfolders for
+    // the flat-fallback strategy to find), so both fall to the (root) catch-all.
+    expect(result.meta.fileCount).toBe(2);
+    expect(result.blocks.every((b) => b.fileCount === 2)).toBe(true);
   });
 });
 

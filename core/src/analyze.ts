@@ -4,12 +4,12 @@ import { aggregateToBlockEdges } from './edges/block-aggregate.js';
 import { runDependencyCruise } from './edges/depcruise-runner.js';
 import { buildFileGraph } from './edges/file-graph.js';
 import { resolveBlock, ROOT_BLOCK_ID } from './edges/resolve-block.js';
+import { walkRealFiles } from './file-walk.js';
+import { runRiskChecks } from './risks/index.js';
 import type { AnalyzeOptions, BlockNode, GraphResult } from './types.js';
 
 // Orchestrator: detect() → runEdges() → runRisks() → cache.write() → GraphResult
-// (docs/architecture/DIRECTORY-TREE.md). Risk checks and caching land in Tasks 4-5
-// (docs/planning/TASKS-V1.md); until then this truthfully reports zero risks rather than
-// fabricating a result.
+// (docs/architecture/DIRECTORY-TREE.md). Caching lands in Task 5 (docs/planning/TASKS-V1.md).
 export async function analyze(options: AnalyzeOptions): Promise<GraphResult> {
   const start = Date.now();
 
@@ -18,13 +18,16 @@ export async function analyze(options: AnalyzeOptions): Promise<GraphResult> {
   const cruiseResult = await runDependencyCruise(options.rootDir);
   const fileEdges = buildFileGraph(cruiseResult, options.rootDir);
 
-  // Real files only. dependency-cruiser's module list also contains phantom entries that
-  // were never actually scanned from disk: a resolution failure (a broken import's target)
-  // surfaces as its own `couldNotResolve` module, and a Node core module (`import fs from
-  // 'node:fs'`) surfaces as its own `coreModule` module — confirmed by a real-repo run
-  // (`aetherinc`) that leaked `path`/`fs`/`url`/etc. into fileCount and the root block's
-  // fileCount before this filter existed.
-  const realModules = cruiseResult.modules.filter((mod) => !mod.couldNotResolve && !mod.coreModule);
+  // `fileCount` (both per-block and meta.fileCount) counts every real file, any language —
+  // NOT just what dependency-cruiser scanned. Import/edge analysis stays TS/JS-only
+  // (docs/decisions/0004, unchanged), but a block's fileCount is a truth-telling inventory,
+  // not a byproduct of which files happen to be importable: a Python/Go/Rust sub-project
+  // (docs/decisions/0005's 2026-07-19 amendment widened block *detection* the same way) is
+  // still real content, and hiding it behind a TS/JS-only count would contradict the very
+  // block it now correctly detects. file-walk.ts applies the identical exclude rules
+  // (node_modules, build output, dot-directories) as dependency-cruiser's own module scan, so
+  // the two file inventories can't silently disagree about what counts as source.
+  const allRealFiles = walkRealFiles(options.rootDir);
 
   // Tally each block's real file count and detect whether any file falls outside every
   // detected block's path prefix — if so, the synthetic root catch-all (docs/decisions/0005)
@@ -32,8 +35,8 @@ export async function analyze(options: AnalyzeOptions): Promise<GraphResult> {
   // files); this is the first point in the pipeline that does.
   const fileCounts = new Map<string, number>();
   let hasRootFiles = false;
-  for (const mod of realModules) {
-    const blockId = resolveBlock(mod.source, blocks);
+  for (const filePath of allRealFiles) {
+    const blockId = resolveBlock(filePath, blocks);
     if (blockId === ROOT_BLOCK_ID) hasRootFiles = true;
     fileCounts.set(blockId, (fileCounts.get(blockId) ?? 0) + 1);
   }
@@ -59,16 +62,31 @@ export async function analyze(options: AnalyzeOptions): Promise<GraphResult> {
     });
   }
 
-  const edges = aggregateToBlockEdges(fileEdges, allBlocks);
+  const blockEdges = aggregateToBlockEdges(fileEdges, allBlocks);
+
+  // Risk checks (docs/decisions/0006) need the full pre-aggregation file-level graph — a
+  // cycle or a boundary violation is a fact about specific files, not just which blocks
+  // happen to touch (block-aggregate.ts already discarded that granularity, and Edge itself
+  // has no evidence array of its own; see risks/index.ts's header comment).
+  const { edges, risks } = runRiskChecks(fileEdges, allBlocks, blockEdges, options.rootDir);
+
+  const riskCounts = new Map<string, number>();
+  for (const risk of risks) {
+    riskCounts.set(risk.source, (riskCounts.get(risk.source) ?? 0) + 1);
+    riskCounts.set(risk.target, (riskCounts.get(risk.target) ?? 0) + 1);
+  }
+  for (const block of allBlocks) {
+    block.riskCount = riskCounts.get(block.id) ?? 0;
+  }
 
   return {
     blocks: allBlocks,
     edges,
-    risks: [],
+    risks,
     meta: {
       analyzedAt: new Date().toISOString(),
       durationMs: Date.now() - start,
-      fileCount: realModules.length,
+      fileCount: allRealFiles.length,
       cacheHit: false,
     },
   };

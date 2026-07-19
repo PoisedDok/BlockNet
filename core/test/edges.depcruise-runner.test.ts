@@ -79,6 +79,22 @@ describe('runDependencyCruise — build-output dot-directories', () => {
   });
 });
 
+describe('runDependencyCruise — non-JS build/dependency output directories', () => {
+  it('excludes target/__pycache__/venv/vendor from the import scan itself, not just fileCount ' +
+    '— path-utils.ts\'s EXCLUDE_PATTERN_SOURCE is shared with file-walk.ts, so this widening ' +
+    'reaches the actual dependency-cruiser call too', async () => {
+    const dir = createTempRepo();
+    writeText(resolve(dir, 'src/main.ts'), "import { b } from './b.js';\nconsole.log(b);\n");
+    writeText(resolve(dir, 'src/b.ts'), 'export const b = 1;\n');
+    writeText(resolve(dir, 'target/pkg/generated.js'), 'module.exports = {};\n');
+    writeText(resolve(dir, 'vendor/some-lib/generated.js'), 'module.exports = {};\n');
+
+    const result = await runDependencyCruise(dir);
+    expect(result.modules.some((m) => m.source.startsWith('target/'))).toBe(false);
+    expect(result.modules.some((m) => m.source.startsWith('vendor/'))).toBe(false);
+  });
+});
+
 describe('runDependencyCruise — unused-import elision', () => {
   it('still reports an import that is never referenced in the importing file', async () => {
     const dir = createTempRepo();
