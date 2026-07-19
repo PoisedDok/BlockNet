@@ -4,8 +4,8 @@
 Accepted
 
 ## Date
-2026-07-10 (Decision's strategy 2 amended 2026-07-19 — see Amendment below; read the
-Decision section as describing the post-amendment mechanism)
+2026-07-10 (Decision amended twice on 2026-07-19 — see Amendments below; read the Decision
+section as describing the post-amendment mechanism)
 
 ## Context
 "What counts as a block" needs an answer before a graph can render, for every repo shape
@@ -21,6 +21,16 @@ A detection cascade, first non-empty strategy wins:
    level deeper, up to 4 levels below root. No folder-name vocabulary — see the 2026-07-19
    amendment below for why.
 3. Fallback for flat repos: top-level folders under `src/`
+
+After that base cascade resolves (whichever of the 3 strategies won, or none did), an
+additive fourth step (`core/src/blocks/other-languages.ts`) checks rootDir's own immediate
+top-level children — and *only* that level, deliberately not recursive — for a project
+manifest in a language other than JS/TS (`pyproject.toml`, `go.mod`, `Cargo.toml`,
+`Dockerfile`, ... — see fs-utils.ts's `hasOtherLanguageManifest`), skipping any child already
+covered by a block the base cascade found. This is how a real polyglot repo's Python/Go/Rust
+sibling (e.g. `AetherArenaV2/backend`) shows up as its own block even though strategies 1-3
+stay JS/TS-only — see the second 2026-07-19 amendment below for why this step is additive and
+shallow rather than folded into strategy 2's own recursive search.
 
 Whichever strategy wins, the pipeline always appends one synthetic **`(root)`** block
 covering any file that matches none of the detected blocks' path prefixes (root-level
@@ -73,3 +83,70 @@ non-JS host would show `fileCount: 0` today, the same phantom-empty-block sympto
 tracked in `docs/planning/PROGRESS.md`'s "Tracked risks" section, just guaranteed instead of
 incidental. That generalization needs `fileCount` fixed to count real files generically
 first; tracked as a separate follow-up there, not bundled into this fix.
+
+## Amendment 2 — 2026-07-19 (multi-language blocks + generic fileCount)
+
+The follow-up flagged above: `fileCount` (`analyze.ts`, both per-block and `meta.fileCount`)
+now comes from a generic all-languages file walk (`core/src/file-walk.ts`) instead of
+dependency-cruiser's TS/JS-only module list — every real file counts, any language, using the
+same exclude rules (`node_modules`, build output, dot-directories) as the rest of the
+pipeline (`path-utils.ts`'s `EXCLUDE_PATTERN_SOURCE`, now shared by both). Import/edge
+analysis stays TS/JS-only (`decisions/0004`, unchanged) — a non-JS block honestly shows 0
+edges, not a lie, just the boundary of what v1 analyzes.
+
+**First attempt, reverted after it broke a previously-passing real repo — recorded here, not
+quietly dropped:** the first version of this work widened strategy 2's own host signal
+(`structural.ts`) to recognize any of a dozen manifest types (`pyproject.toml`, `go.mod`,
+`Cargo.toml`, `Dockerfile`, ...), reusing its existing 4-level recursive per-branch search.
+Re-running Checkpoint A's real-repo set immediately surfaced two new real bugs:
+
+1. **Cascade hijacking.** `aetherinc` — previously correctly detected via strategy 3's flat
+   `src/` fallback (6 real blocks: `src/app`, `src/components`, `src/lib`, ...) — collapsed to
+   2 blocks, one of them a single incidental `pyproject.toml` found 4 levels deep inside
+   `project/agent-skills/red-team-skills/constant-time-analysis/` (a Claude Code tooling
+   directory, nothing to do with the actual Next.js application). Because strategy 2's *any*
+   non-empty result unconditionally wins the "first non-empty strategy" cascade, one spurious
+   deep manifest — the kind any sufficiently large real repo tends to have somewhere — was
+   enough to discard a correct, much more relevant result. This was never reachable before:
+   the old JS/TS-only `hasPackageJson` check made a spurious match this unlikely in practice,
+   but the real fix is architectural, not "get lucky with the manifest list."
+2. **Vendored build output counted as source.** Recognizing `Cargo.toml` as a host signal
+   surfaced a real Rust project (`AetherArenaV2/desktop`'s Tauri shell) — whose `target/`
+   directory (Cargo's build output, analogous to `node_modules`) was NOT covered by
+   `EXCLUDE_PATTERN_SOURCE`, which only knew about JS-ecosystem output directories. Measured
+   result: a `desktop` block with **131,144 files**, almost entirely vendored Cargo build
+   artifacts counted as if they were source. Recognizing a language as a block-detection host
+   without also excluding its build/dependency output is only half a fix.
+
+**Both fixed, not patched around:**
+1. `structural.ts` reverted to JS/TS-only (`hasPackageJson`) — its recursive, multi-level
+   search is a validated mechanism for JS/TS monorepos (Amendment 1) and stays scoped to what
+   it was actually proven correct for. Non-JS host detection moved to the new, deliberately
+   *additive and shallow* `other-languages.ts` (Decision section above): top-level-only, never
+   able to preempt or replace what the base cascade already found, so one incidental deep
+   manifest anywhere in the tree can no longer hijack an unrelated repo's real structure.
+2. `EXCLUDE_PATTERN_SOURCE` widened to also exclude `target` (Rust/Java-Maven), `__pycache__`
+   and `venv` (Python), and `vendor` (Go/PHP/legacy JS) — the same "every current or future
+   [language]'s build/cache output" principle `.next`/`.nuxt`/etc. dot-directory exclusion
+   already establishes for JS frameworks, extended to the languages block detection now
+   recognizes.
+
+Re-validated against all 4 Checkpoint A real repos after both fixes: `aetherinc` back to 6
+correct blocks (no regression), `AetherArenaV2/desktop` back to a sane 122 files,
+`AetherArenaV2/backend` now correctly appears (510 files, real Python content, 0 pills —
+honest, not misattributed from the root's unrelated JS dependencies via `pills.ts`'s
+fallback, which was also fixed during this work to distinguish "no manifest at all" from "a
+manifest in a different language" before falling back to root).
+
+**Correction, same day, found by an immediate follow-up adversarial review:** fix 2 above
+(the `EXCLUDE_PATTERN_SOURCE` widening) was necessary but not, on its own, sufficient —
+`blocks/fs-utils.ts`'s `listChildDirectories`, the directory-traversal primitive every
+block-detection strategy actually walks through, was never wired to the shared exclude
+predicate at all (it had its own older, narrower dot-dir/`node_modules`-only filter). A
+`package.json` vendored inside `vendor/`/`dist`/`target` could still produce a spurious block
+and still hijack the cascade — the same failure class this whole amendment exists to close,
+just reachable through a different manifest type. Fixed by routing
+`listChildDirectories` through `path-utils.ts`'s `isExcludedPath` too. Full account in
+`docs/planning/PROGRESS.md`'s "Round 2 adversarial review" entry, including a second real bug
+found the same pass (`file-walk.ts`'s real-path dedup covered directories but not individual
+files).
