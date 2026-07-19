@@ -62,7 +62,8 @@ read is never torn even if two VS Code windows on the same repo write concurrent
 Analysis always runs in a forked child process
 (`docs/architecture/PROCESS-BOUNDARY.md`), never on the extension host thread — this is
 non-negotiable regardless of cache state, since even a cache-miss delta pass must not
-freeze typing. `dependency-cruiser`'s traversal excludes `node_modules`, `.git`, `dist`,
-`build`, `out`, and `coverage` by binding configuration, not convention — see ADR-0003 —
+freeze typing. `dependency-cruiser`'s traversal excludes `node_modules`, `dist`, `build`,
+`out`, `coverage`, and every dot-directory (`.git`, `.next`, and any other build/cache
+output a framework generates) by binding configuration, not convention — see ADR-0003 —
 so the "cheap once edges are known" framing above holds even on repos with large vendored
 trees.
