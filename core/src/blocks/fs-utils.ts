@@ -1,8 +1,9 @@
 // Shared filesystem helpers for the block-detection cascade. Centralized so the
 // symlink-following and root-containment rules below apply identically to every strategy —
 // see docs/planning/PROGRESS.md's Task 2 entry for the real-repo bugs this exists to close.
-import { readdirSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { isWithinRoot } from '../path-utils.js';
 
 // `Dirent.isDirectory()` (from readdirSync's withFileTypes) does NOT follow symlinks — a
 // symlinked workspace member (pnpm-style linking, Nx/Bazel-generated layouts) would
@@ -35,6 +36,13 @@ export function listChildDirectories(dir: string): string[] {
     .map((e) => e.name);
 }
 
+/** Whether `dir` is itself a self-contained JS/TS project — the one shared "is this a real
+ * project, or just a container folder" signal every block-detection strategy that needs it
+ * (workspaces.ts, structural.ts) should use, so the definition never quietly forks. */
+export function hasPackageJson(dir: string): boolean {
+  return existsSync(join(dir, 'package.json'));
+}
+
 /**
  * `absDir` as a POSIX-style path relative to `rootDir`, or `undefined` if `absDir` IS
  * `rootDir` (an empty path can't be a block id) or escapes `rootDir` entirely (a workspace
@@ -46,7 +54,6 @@ export function listChildDirectories(dir: string): string[] {
  * candidate, not even a low-confidence one.
  */
 export function toBlockRelativePath(rootDir: string, absDir: string): string | undefined {
-  const rel = relative(rootDir, absDir);
-  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return undefined;
-  return rel.split('\\').join('/');
+  const rel = relative(rootDir, absDir).split('\\').join('/');
+  return isWithinRoot(rel) ? rel : undefined;
 }

@@ -57,12 +57,13 @@ describe('derivePills', () => {
     expect(derivePills(resolve(root, 'src/auth'), root)).toEqual(['express']);
   });
 
-  it('falls back to root when the block\'s own package.json is malformed', () => {
+  it('does NOT fall back to root when the block\'s own package.json exists but is malformed — ' +
+    'misattributing an unrelated project\'s stack is worse than showing none', () => {
     const root = createTempRepo();
     writeJson(resolve(root, 'package.json'), { name: 'root', dependencies: { express: '^4.18.0' } });
     writeText(resolve(root, 'packages/a/package.json'), '{ not valid json');
 
-    expect(derivePills(resolve(root, 'packages/a'), root)).toEqual(['express']);
+    expect(derivePills(resolve(root, 'packages/a'), root)).toEqual([]);
   });
 
   it('returns an empty array when neither the block nor the root has a package.json', () => {

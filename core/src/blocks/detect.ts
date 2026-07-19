@@ -1,6 +1,6 @@
 // Cascade entry point (docs/decisions/0005-blocks-auto-detected.md): first non-empty
-// strategy wins — workspaces/tsconfig-refs, then conventional folders, then the flat-src
-// fallback. Turns each strategy's raw candidates into full BlockNode[] with pills.
+// strategy wins — workspaces/tsconfig-refs, then the generic structural host-walk, then the
+// flat-src fallback. Turns each strategy's raw candidates into full BlockNode[] with pills.
 //
 // Deliberately NOT done here: the synthetic "(root)" catch-all block the ADR describes. Its
 // existence depends on whether any real file fails to match every detected block's path
@@ -10,10 +10,10 @@
 // same ADR is built on. analyze.ts appends it conditionally once Task 3 lands.
 import { join } from 'node:path';
 import type { BlockNode } from '../types.js';
-import { detectConventionalBlocks } from './conventional.js';
 import { detectFlatFallbackBlocks } from './flat-fallback.js';
 import type { BlockCandidate } from './internal-types.js';
 import { derivePills } from './pills.js';
+import { detectStructuralBlocks } from './structural.js';
 import { detectWorkspaceBlocks } from './workspaces.js';
 
 function toBlockNodes(candidates: BlockCandidate[], rootDir: string): BlockNode[] {
@@ -28,7 +28,7 @@ function toBlockNodes(candidates: BlockCandidate[], rootDir: string): BlockNode[
 }
 
 export function detectBlocks(rootDir: string): BlockNode[] {
-  const strategies = [detectWorkspaceBlocks, detectConventionalBlocks, detectFlatFallbackBlocks];
+  const strategies = [detectWorkspaceBlocks, detectStructuralBlocks, detectFlatFallbackBlocks];
 
   for (const strategy of strategies) {
     const candidates = strategy(rootDir);

@@ -55,21 +55,21 @@ describe('detectBlocks — cascade (docs/decisions/0005-blocks-auto-detected.md)
     }
   });
 
-  it('prefers workspaces over conventional folders when both are present (cascade order)', () => {
+  it('prefers workspaces over the structural host-walk when both are present (cascade order)', () => {
     const root = createTempRepo();
     writeJson(resolve(root, 'package.json'), { name: 'root', workspaces: ['packages/*'] });
     writeJson(resolve(root, 'packages/x/package.json'), { name: 'x' });
-    // A conventional-looking folder also exists, but must be ignored: strategy 1 already
+    // A second, unrelated host also exists, but must be ignored: strategy 1 already
     // produced a non-empty result.
-    mkdirSync(resolve(root, 'apps/web'), { recursive: true });
+    writeJson(resolve(root, 'apps/web/package.json'), { name: 'web' });
 
     const blocks = detectBlocks(root);
     expect(blocks.map((b) => b.path)).toEqual(['packages/x']);
   });
 
-  it('prefers conventional folders over the flat src/ fallback when workspaces is absent', () => {
+  it('prefers the structural host-walk over the flat src/ fallback when workspaces is absent', () => {
     const root = createTempRepo();
-    mkdirSync(resolve(root, 'apps/web'), { recursive: true });
+    writeJson(resolve(root, 'apps/web/package.json'), { name: 'web' });
     mkdirSync(resolve(root, 'src/auth'), { recursive: true });
 
     const blocks = detectBlocks(root);
