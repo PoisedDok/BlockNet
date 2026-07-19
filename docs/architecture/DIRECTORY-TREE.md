@@ -42,6 +42,17 @@ BlockNet/
 │   │   ├── log.ts                    # tiny leveled logger; no I/O side effects as a library.
 │   │   │                             #   Added with Task 2, once blocks/ has real phases to
 │   │   │                             #   report — cli.ts/analyze.ts have nothing to log before then.
+│   │   ├── tsconfig-utils.ts         # shared JSONC-safe tsconfig.json reader; used by both
+│   │   │                             #   blocks/workspaces.ts (project references) and
+│   │   │                             #   edges/depcruise-runner.ts (path aliases) so the
+│   │   │                             #   parse-error-degrades-to-warning behavior can't
+│   │   │                             #   drift between the two call sites. Added with Task 3.
+│   │   ├── path-utils.ts             # shared rootDir-containment predicate; used by both
+│   │   │                             #   blocks/fs-utils.ts (workspace/tsconfig-reference
+│   │   │                             #   candidates) and edges/{depcruise-runner,file-graph}.ts
+│   │   │                             #   (resolved import targets) so a path-escape bug fixed
+│   │   │                             #   once (Task 2) can't silently reappear unguarded in a
+│   │   │                             #   sibling module. Added with Task 3.
 │   │   │
 │   │   ├── blocks/                   # LAYER 1 — block auto-detection
 │   │   │   ├── detect.ts             # cascade entry point; first non-empty strategy wins.
@@ -51,17 +62,25 @@ BlockNet/
 │   │   │   │                         #   conditionally once edges/resolve-block.ts (Task 3)
 │   │   │   │                         #   finds a file matching no detected block's prefix.
 │   │   │   ├── workspaces.ts         # strategy 1: package.json workspaces / tsconfig refs
-│   │   │   ├── conventional.ts       # strategy 2: apps/ packages/ services/ libs/ infra/
+│   │   │   ├── structural.ts         # strategy 2: generic host-walk — no folder-name
+│   │   │   │                         #   vocabulary; a dir owning package.json is a block,
+│   │   │   │                         #   non-hosts expand one level deeper, depth-capped
+│   │   │   │                         #   (amended 2026-07-19, see decisions/0005)
 │   │   │   ├── flat-fallback.ts      # strategy 3: top-level folders under src/
 │   │   │   ├── pills.ts              # tech-pill derivation from each block's own package.json
-│   │   │   ├── fs-utils.ts           # shared symlink-following directory listing +
-│   │   │   │                         #   rootDir-containment guard, used by all 3 strategies
+│   │   │   ├── fs-utils.ts           # shared symlink-following directory listing (used by
+│   │   │   │                         #   all 3 strategies), rootDir-containment guard, and
+│   │   │   │                         #   hasPackageJson ("is this dir a real project" — used
+│   │   │   │                         #   by workspaces.ts + structural.ts)
 │   │   │   └── internal-types.ts     # BlockCandidate — pre-pills shape strategies return
 │   │   │
 │   │   ├── edges/                    # LAYER 1 — import truth
 │   │   │   ├── depcruise-runner.ts   # invokes dependency-cruiser's in-process API; binding
-│   │   │   │                         #   exclude config: node_modules, .git, dist, build,
-│   │   │   │                         #   out, coverage — see decisions/0003
+│   │   │   │                         #   exclude config: node_modules, dist, build, out,
+│   │   │   │                         #   coverage, and every dot-directory (.git, .next, ...)
+│   │   │   │                         #   — see decisions/0003. Also resolves tsconfig `paths`
+│   │   │   │                         #   aliases itself (cwd-independent), rather than via
+│   │   │   │                         #   dependency-cruiser's own tsConfig option.
 │   │   │   ├── file-graph.ts         # normalizes dep-cruiser's module graph → FileEdge[]
 │   │   │   ├── resolve-block.ts      # file path → owning block id (longest-prefix match);
 │   │   │   │                         #   no match → the "(root)" catch-all block, never a
@@ -95,18 +114,24 @@ BlockNet/
 │       ├── fixtures/
 │       │   ├── monorepo/             # npm-workspaces fixture: packages/a,b,c, each with a
 │       │   │   └── ...               #   real dependency for pill tests (react/express/pg).
-│       │   │                         #   The b↔c cycle / a-deep-imports-c/src/internal
-│       │   │                         #   content this fixture will also carry is Task 3/4's
-│       │   │                         #   to add, once cycle/boundary detection exists to
-│       │   │                         #   test against — not present yet.
-│       │   └── flat-repo/            # single-package fixture: src/{auth,api,ui}
-│       │       └── ...
+│       │   │                         #   Also carries, added with Task 3: a root tsconfig.json
+│       │   │                         #   aliasing into c/src/internal.ts (a deep import,
+│       │   │                         #   doubling as Task 4's boundary-violation fixture), a
+│       │   │                         #   barrel import (b/src/index.ts re-exporting
+│       │   │                         #   internal.ts), and a b↔c file-level import cycle.
+│       │   └── flat-repo/            # single-package fixture: src/{auth,api,ui}. api/index.ts
+│       │       └── ...               #   imports auth/index.ts, added with Task 3.
+│       ├── path-utils.test.ts
 │       ├── blocks.workspaces.test.ts
-│       ├── blocks.conventional.test.ts
+│       ├── blocks.structural.test.ts
 │       ├── blocks.flat-fallback.test.ts
 │       ├── blocks.pills.test.ts
 │       ├── blocks.detect.test.ts
-│       ├── edges.test.ts
+│       ├── edges.depcruise-runner.test.ts
+│       ├── edges.file-graph.test.ts
+│       ├── edges.resolve-block.test.ts
+│       ├── edges.block-aggregate.test.ts
+│       ├── analyze.edges.test.ts
 │       ├── risks.cycles.test.ts
 │       ├── risks.boundary.test.ts
 │       ├── cache.test.ts
