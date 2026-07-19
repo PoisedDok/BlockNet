@@ -34,6 +34,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "dependency-cruiser": "^18.1.0",
     "jsonc-parser": "^3.3.1"
   }
 }
