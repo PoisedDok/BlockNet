@@ -8,8 +8,8 @@ not rewrite TASKS-V1.md/ROADMAP-V2.md themselves (`CLAUDE.md`).
 
 | Phase | Status |
 |---|---|
-| Phase 1 — Engine (Tasks 1-5) | Tasks 1-3 done. Tasks 4-5 not started. |
-| Checkpoint A (truth gate) | In progress — real-repo run found and fixed a block-detection bug (see below). Human sign-off with Krish still pending before Task 4. |
+| Phase 1 — Engine (Tasks 1-5) | Tasks 1-4 done. Task 5 not started. |
+| Checkpoint A (truth gate) | Signed off with Krish 2026-07-19 — see below. |
 | Checkpoint B (engine complete) | Not reached. |
 | Phase 2 — Extension (Tasks 6-9) | Not started — blocked on Checkpoint B. |
 | Phase 3 — Ship (Task 10) | Not started. |
@@ -319,22 +319,203 @@ symlink-cycle cost bug), 2 existing `blocks.detect.test.ts` cascade-order tests 
 the new strategy-2 semantics, 1 existing `blocks.pills.test.ts` test corrected. 128/128 tests
 pass, build/typecheck/lint clean, all 4 real repos re-confirmed unchanged after both fixes.
 
-**Known limitation, deliberately not fixed in this pass:** `structural.ts` only recognizes
+**Known limitation at this point, resolved below:** `structural.ts` only recognized
 `package.json` as a "host" signal, so a real non-JS/TS sub-project (like `AetherArenaV2`'s
-own `backend/`, a genuine Python project) still doesn't become a block — correctly absent
-per ADR-0004's TS/JS-only v1 scope, but see "Tracked risks" below for why widening this
-needs `fileCount` fixed first, not bundled blindly into this same change.
+own `backend/`, a genuine Python project) didn't become a block yet — correctly absent per
+ADR-0004's TS/JS-only v1 scope, but explicitly requested as a follow-up (see the next entry).
 
-**Not yet done:** human sign-off with Krish on the real-repo results (the actual point of
-Checkpoint A), and the already-tracked flat-`src/` fallback noise (below) hasn't been
-revisited — still open.
+### Multi-language block detection + generic fileCount (2026-07-19)
+
+Explicitly requested: block detection and `fileCount` should reflect a repo's *whole* file
+inventory, any language — a Python/Docker/Go sub-project sitting next to a TS/JS one is real
+architecture, not something to hide because v1's import analysis is TS/JS-only. Landed in
+three pieces: `core/src/file-walk.ts` (generic all-languages file walk, same exclude rules as
+dependency-cruiser, shares `path-utils.ts`'s `EXCLUDE_PATTERN_SOURCE` so the two file
+inventories can't drift), `analyze.ts` rewired to compute `fileCount` from it instead of
+dependency-cruiser's TS/JS module list, and block detection widened to recognize non-JS
+project manifests. `docs/decisions/0004` got a short clarification appended: TS/JS-only
+governs import/edge/risk analysis, not block detection or fileCount — always true in intent,
+worth saying explicitly now that the two are visibly decoupled.
+
+**First attempt reverted after it broke a previously-passing real repo — recorded, not
+dropped.** The first version widened `structural.ts`'s own recursive host search (4 levels
+deep, per branch) to recognize a dozen manifest types. Re-running Checkpoint A's real-repo set
+immediately found two new real bugs, not edge cases:
+1. **Cascade hijacking.** `aetherinc` — previously 6 correct blocks via the flat-`src/`
+   fallback — collapsed to 2, because a single incidental `pyproject.toml` found 4 levels deep
+   inside `project/agent-skills/red-team-skills/constant-time-analysis/` (Claude Code tooling,
+   unrelated to the actual Next.js app) made strategy 2 non-empty, and "first non-empty
+   strategy wins" discarded the far more relevant flat-fallback result outright.
+2. **Vendored build output counted as source.** Recognizing `Cargo.toml` as a host surfaced
+   `AetherArenaV2/desktop`'s real Tauri/Rust project — whose `target/` build directory wasn't
+   in `EXCLUDE_PATTERN_SOURCE` (JS-ecosystem names only). Measured: a `desktop` block with
+   **131,144 files**, almost entirely Cargo build artifacts, not source.
+
+**Both fixed architecturally, not patched:** `structural.ts` reverted to JS/TS-only
+(`hasPackageJson`) — its recursive multi-level search stays scoped to what Checkpoint A
+actually validated it for. Non-JS host detection moved to a new, deliberately shallow and
+additive module (`core/src/blocks/other-languages.ts`): checks rootDir's own top-level
+children *only* (no recursion) for a non-JS manifest not already covered by the base cascade,
+and runs regardless of which base strategy won — so it can never preempt or replace a correct
+result the way the reverted version could. `EXCLUDE_PATTERN_SOURCE` widened to also exclude
+`target` (Rust/Maven), `__pycache__`/`venv` (Python), and `vendor` (Go/PHP/legacy JS) — the
+same "every language's build/cache output gets excluded categorically" principle already
+established for JS frameworks' dot-directories.
+
+`pills.ts` also had to change: a block with a *different* language's manifest (no
+`package.json` of its own) must not fall back to the repo root's `package.json` — that
+fallback exists only for flat-fallback blocks with no manifest of any kind. Fixed the same
+way as the earlier corrupt-JSON fix — distinguish "no manifest at all" from "a manifest, just
+not this one" before ever falling back.
+
+Re-validated against all 4 Checkpoint A real repos after both fixes: `aetherinc` back to 6
+correct blocks (zero regression — the exact repo the false start broke), `AetherArenaV2`'s
+`desktop` block back to a sane 122 files (from the pathological 131,144), and
+`AetherArenaV2/backend` now correctly appears — 510 files, real Python content, 0 pills
+(honest — not misattributed from the root's unrelated JS dependencies). New tests: 3 for
+`file-walk.ts`'s exclude widening, 2 added to `structural.ts`'s suite for the reverted
+JS/TS-only scope (git diff confirmed: 2 added, 0 removed — the original attempt's tests never
+reached a committed state, so there's nothing to show as "removed" in history), 7 for the new
+`other-languages.ts` module, 2 integration tests in `blocks.detect.test.ts` reproducing the
+exact `aetherinc`-hijack and `AetherArenaV2`-shape scenarios end to end, plus
+`analyze.edges.test.ts`'s existing fileCount expectations recomputed by hand and independently
+verified against actual output (not just accepted from the code) before being updated.
+158/158 tests pass, build/typecheck/lint clean.
+
+### Round 2 adversarial review (2026-07-19) — two more real bugs found, both fixed
+
+Re-ran the two-pass review from scratch on the multi-language work above, explicitly briefed
+to find what was missed, not confirm the work looked reasonable. Doc-consistency pass found
+two leftover artifacts of the reverted first attempt: `pills.ts`'s comment still attributed
+non-JS host detection to "`structural.ts`'s widened host detection" (moved to
+`other-languages.ts`), and `fs-utils.ts`'s `hasProjectManifest` was dead code (exported,
+zero call sites) with a docstring falsely claiming `structural.ts` used it — both fixed
+(comment corrected, dead function deleted), `DIRECTORY-TREE.md`'s matching false claim fixed
+too.
+
+Architectural-soundness pass found two real, more serious bugs, both confirmed by the
+reviewer actually running the code, not just reading it:
+
+1. **The `EXCLUDE_PATTERN_SOURCE` widening (`target`/`__pycache__`/`venv`/`vendor`) never
+   reached block detection.** It was wired into `file-walk.ts` and `depcruise-runner.ts`, but
+   `blocks/fs-utils.ts`'s `listChildDirectories` — the directory-traversal primitive
+   `structural.ts`, `workspaces.ts`, `other-languages.ts`, and `flat-fallback.ts` all actually
+   walk through — still only filtered dot-directories and the literal string `node_modules`.
+   Reviewer reproduced directly: a `package.json` vendored inside `vendor/` (a real pattern —
+   Composer-vendored JS asset pipelines, npm-pack output copied into `dist/`, wasm-pack's
+   `target/pkg/package.json`) still produced a real, spurious block candidate, capable of
+   hijacking the whole cascade exactly like the `pyproject.toml` bug this same day's earlier
+   fix closed — just via a different manifest type. **This undercut the stated point of the
+   exclude-pattern widening for the one thing it most needed to cover.** Fixed:
+   `listChildDirectories` now filters through the same shared `isExcludedPath` predicate
+   (tested against each entry's bare name — the pattern's `(^|/)...(/|$)` anchors make that
+   equivalent to testing a full relative path, verified directly with a Node one-liner before
+   relying on it). This closes the gap for all four block-detection strategies at once, and
+   incidentally closes a latent gap that predated this whole round: `dist`/`build`/`out`/
+   `coverage` were never excluded from block-detection's directory traversal either, only from
+   the file/edge scan — just never manifested on any of the 4 Checkpoint A real repos.
+2. **`file-walk.ts`'s real-path dedup only covered directories, not individual files.** A
+   single physical file reachable via multiple symlinked *file* paths (a real pattern —
+   Nx/Bazel-style tooling symlinking one shared config file into several package directories)
+   was counted once per path. Reviewer reproduced: 3 entries for one real file. This directly
+   contradicted this doc's own earlier claim that `walkRealFiles` has "the identical real-path
+   dedup applied to the file walk itself... counts exactly once" — true for directories, false
+   for files. Fixed: the same `alreadyVisited` check now gates the file-push branch too, not
+   just the directory-recursion branch.
+
+Also addressed, lower severity: `depcruise-runner.ts`'s import scan silently gained the same
+widened exclude set as a side effect of sharing `EXCLUDE_PATTERN_SOURCE` — real, intentional,
+documented, but untested until now; added a test confirming `target`/`vendor` content is
+excluded from the actual dependency-cruiser module graph, not just `fileCount`. Added a test
+for `other-languages.ts`'s sibling-prefix boundary (`backend` vs `backend-service`) — the
+reviewer confirmed the existing slash-bounded prefix check already got this right (same
+pattern `resolve-block.ts`'s `isPrefixMatch` uses), but it had zero test coverage before now.
+
+**Checked and accepted, not fixed:** neither `file-walk.ts` nor `structural.ts` verifies a
+symlink's resolved target stays under `rootDir` before recursing into it — only cycle
+detection exists, which bounds *revisits* of the same real directory but not the size of a
+single pathological external branch (a symlink pointing at `/` or `$HOME`, walked in full
+modulo cycles). Not a path-leak (reported paths are built from the symlink's own location, not
+its target) — an unbounded-cost risk for a symlink no real repo in the Checkpoint A set has.
+v1's threat model is a user's own trusted repo, not adversarial input; revisit if a real repo
+ever needs it.
+
+Re-validated against all 4 real repos after every fix above: results stable, `fileCount`
+dropped slightly where `vendor`/`target`/`venv`/`__pycache__` content was previously leaking
+in (e.g. BlockNet's own `(root)`: 829 → 827). 162/162 tests pass, build/typecheck/lint clean.
+
+**Checkpoint A signed off (2026-07-19).** Reviewed the real-repo block/edge results with
+Krish across all 4 repos. The one open question — why `AetherArenaV2` and BlockNet-on-itself
+show zero edges — was traced and confirmed architecturally correct, not a bug: `AetherArenaV2`
+spans three separate language ecosystems (Rust `obscura`, Python `backend`, JS/TS
+`frontend`/`open-connector`/`desktop`) with no workspace linkage and zero literal cross-block
+import statements (grepped directly); BlockNet's own `(root)` block is almost entirely
+`agent-skills/` tooling that never imports `core` or vice versa. `aetherinc`'s 4 real edges
+were already byte-spot-checked in Task 3. Go. The already-tracked flat-`src/` fallback noise
+(below) remains open, deferred past Checkpoint A by explicit choice, not an oversight.
+
+### Task 4 — Risk checks: cycles + boundary ✅ (2026-07-19)
+ADR: [decisions/0006](../decisions/0006-risk-checks-cycles-and-boundary.md) (amended this
+task — see below). Built in `core/src/risks/`:
+- `cycles.ts` — hand-rolled Tarjan SCC, deliberately **iterative**, not the textbook
+  recursive formulation: a recursive DFS's stack depth tracks the longest import chain in the
+  repo, not file count, and real repos build chains long enough to blow V8's default stack —
+  the same class of "never checked against real-repo shape" mistake this session already hit
+  once for `structural.ts`'s symlink walk. Proven safe with a 20,000-node linear-chain
+  regression test (both acyclic, and separately closed into one giant cycle) — both complete
+  in milliseconds. Always runs over the full file-level edge list, never incrementally scoped
+  (decisions/0008).
+- `boundary.ts` — deep-import-vs-declared-entry rule. "Declared entry" resolves `exports`
+  (every string leaf, nested condition objects flattened) when present, else `main`, else the
+  block's own conventional index file — checked at both `<block>/index.*` and
+  `<block>/src/index.*`, not literally just the block root (see decisions/0006's amendment for
+  why a block-root-only reading would misfire on nearly every real unbuilt TS/JS monorepo
+  package). Each candidate is resolved to the real file on disk the same way TypeScript/
+  dependency-cruiser would (literal path → source-extension swap → directory-index fallback).
+- `index.ts` — runs both checks, groups file-level findings into `Risk[]` per directed block
+  pair, attaches the winning risk to each block `Edge`. A pair can carry both tags at once;
+  CIRCULAR wins the single `Edge.risk` slot (cycles are a hard graph fact, ~zero FP by
+  construction; boundary's precision depends on the declared-entry definition) but both `Risk`
+  objects always survive into the canonical `risks[]` array.
+- `analyze.ts` wired in: retains the file-level edge graph (previously discarded immediately
+  after block-aggregation) so risk checks have the granularity they need, computes each
+  block's `riskCount` as the count of distinct risks touching it as source or target.
+- `blocks/fs-utils.ts` gained a shared `readPackageJson` (pills.ts's private copy generalized
+  and reused by boundary.ts — the same "same logic starts drifting into a second copy" pattern
+  this session already fixed twice for other helpers).
+- 33 new tests: `risks.cycles.test.ts` (9, incl. both 20k-node scale tests), `risks.boundary
+  .test.ts` (15, incl. exports/main/conventional-index resolution and the real fixture spot
+  check), `risks.index.test.ts` (5, incl. the both-tags-on-one-pair priority case),
+  `analyze.risks.test.ts` (6, real fixture end-to-end + riskCount tallying + a clean-repo
+  no-false-positive case). 200/200 total, build/typecheck/lint clean.
+
+**Real bug found and fixed during Checkpoint-A re-validation, before this task could be
+called done:** the first working version of `boundary.ts` flagged **100% of `aetherinc`'s
+real crossing edges** (all 4) as BOUNDARY. Root cause: flat-fallback blocks (`src/app`,
+`src/components`, `src/lib` — strategy 3, no `package.json` of any kind) have no real
+"declared entry" concept at all, but the "no exports, no main" fallback tried to resolve a
+conventional `index.ts` these directories were never meant to have, found none, and treated
+every single import as a violation — the exact false-positive-on-sight failure
+`docs/PRINCIPLES.md` treats as fatal, on a real Checkpoint-A repo, not a fixture. Fixed:
+`findBoundaryViolations` now skips any target block that owns no `package.json` at all
+(`hasPackageJson`, the same signal `workspaces.ts`/`structural.ts` already use) before ever
+computing declared entries — a flat-fallback block is a directory grouping inside one
+application, not a package with a designed public surface, so there's no real boundary to
+violate. Re-verified against all 4 Checkpoint A real repos after the fix: 0 risks everywhere.
+Full mechanism and rationale in decisions/0006's amendment.
+
+**Honest limitation, not swept under the rug:** none of the 4 Checkpoint A real repos
+currently exercises a true CIRCULAR or BOUNDARY positive — `aetherinc`'s only crossing edges
+are into now-correctly-exempted flat-fallback blocks; `AetherArenaV2` and BlockNet-on-itself
+have zero crossing edges of any kind (established above). The true-positive path is verified
+by the checked-in monorepo fixture (byte-checked evidence: the exact `b↔c` cycle and `a→c`
+deep import it was built for) and extensive synthetic unit tests, not yet by a real repo
+naturally triggering one. Revisit if a future real repo does.
 
 ## Next up
 
-**Checkpoint A** (human review with Krish, real-repo truth check) is in progress — the
-block-detection truth-gate failure it found has been fixed (above), but human sign-off is
-still pending. Do not skip ahead to Task 4/5 without it. Task 4 (risks) → 5 (cache) follow in
-order after that; each is blocked on the previous.
+Task 5 (cache + incremental invalidation, decisions/0008) is next, blocked on nothing but
+itself. Checkpoint B (engine complete, `graph.json` schema frozen) follows once it's done.
 
 ## Deferred by design (not gaps)
 
@@ -364,16 +545,17 @@ order after that; each is blocked on the previous.
   a realistic (low-hundreds) block count, this is single-digit milliseconds of string
   comparisons, not a real cost. No index added — `CLAUDE.md` prohibits optimizing without
   Checkpoint A measurement data, and there's no data yet suggesting this needs one.
-- **`structural.ts` only recognizes `package.json` hosts, not other languages' project
-  manifests** (`pyproject.toml`, `go.mod`, `Cargo.toml`, ...). Real polyglot repos (like
-  `AetherArenaV2`'s own `backend/`, a genuine Python project) still fall through to `(root)`
-  rather than appearing as their own honestly-shaped block. Deliberately not widened in the
-  same pass that fixed the folder-name-vocabulary bug: `fileCount` (`analyze.ts`) is derived
-  solely from dependency-cruiser's TS/JS module list, so a non-JS host would show
-  `fileCount: 0` today — the same phantom-empty-block symptom as the flat-fallback risk
-  above, just guaranteed instead of incidental. Needs `fileCount` fixed to count real files
-  generically (not just TS/JS-scannable ones) before this is safe to do; tracked as a
-  follow-up, not urgent for Checkpoint A's TS/JS-only truth gate.
+- **RESOLVED (2026-07-19, see "Multi-language block detection + generic fileCount" above):**
+  non-JS project manifests are now recognized via `other-languages.ts`, additively and
+  top-level-only, and `fileCount` comes from a generic all-languages file walk. What remains,
+  as a deliberate design trade-off rather than an oversight: `other-languages.ts` checks only
+  rootDir's *immediate* children, never recursively — a non-JS sub-project nested more than
+  one level deep (e.g. `services/backend-python/pyproject.toml`) won't be found, the same way
+  `structural.ts`'s own JS/TS search needed up to 4 levels for `backend/packages/harness`.
+  Not widened in this pass: the same cascade-hijacking failure mode that forced this module to
+  be shallow in the first place would need a real architectural answer (e.g. depth-limited
+  recursion that still can't preempt an already-resolved base cascade), not just raising a
+  depth constant. No real repo in the Checkpoint A set has needed it yet.
 - **Dual-discoverable directories (a real top-level directory AND a symlink to it that isn't
   hidden inside `node_modules`/a dot-directory) — fixed as a side effect of the symlink-cycle
   dedup fix above, verified empirically, not just inferred.** Originally suspected (before the
@@ -383,11 +565,14 @@ order after that; each is blocked on the previous.
   dedup — whichever path the directory walk visits first "wins"; not fixed by name, so which
   literal path wins is filesystem-read-order-dependent and not guaranteed stable, but exactly
   one always wins, never both). The other path's files correctly fall through to `(root)`
-  instead of fabricating a cross-block edge or double-counting into two blocks. Dep-cruiser
-  still walks both the real directory and the symlinked alias as separate physical files
-  (confirmed: `real-service/index.ts` and `symlinked-service/index.ts` are two distinct module
-  entries even though they're the same bytes on disk), so `meta.fileCount` can still
-  double-count the same physical content once under the winning block and once under
-  `(root)` — a real but much smaller residual gap than the original fabricated-edge finding,
-  living in `depcruise-runner.ts`'s file walk rather than block detection, and out of scope
-  for this fix. Not hit on any of the 4 Checkpoint A real repos.
+  instead of fabricating a cross-block edge or double-counting into two blocks. **Update
+  (2026-07-19):** `meta.fileCount`'s double-counting concern noted here is now also resolved
+  as a side effect of `file-walk.ts` replacing dependency-cruiser's module list as
+  `fileCount`'s source — `walkRealFiles` has the identical real-path dedup applied to the file
+  walk itself (tested directly: a real directory + a separately-discoverable symlink alias to
+  it counts exactly once). What's left, unrelated to `fileCount`: dependency-cruiser's own
+  internal module list still walks both the real directory and the symlinked alias as separate
+  physical files for *edge* purposes (`real-service/index.ts` and `symlinked-service/index.ts`
+  are two distinct module entries even though they're the same bytes on disk) — a residual gap
+  in edge detection, not file counting, living in `depcruise-runner.ts` and out of scope for
+  this fix. Not hit on any of the 4 Checkpoint A real repos.
