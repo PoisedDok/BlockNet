@@ -66,6 +66,16 @@ describe('derivePills', () => {
     expect(derivePills(resolve(root, 'packages/a'), root)).toEqual([]);
   });
 
+  it('does NOT fall back to root for a block that owns a different language\'s manifest ' +
+    '(e.g. a Python pyproject.toml, no package.json) — the root\'s JS deps are not this ' +
+    'block\'s tech stack', () => {
+    const root = createTempRepo();
+    writeJson(resolve(root, 'package.json'), { name: 'root', dependencies: { express: '^4.18.0' } });
+    writeText(resolve(root, 'backend/pyproject.toml'), '[project]\nname = "backend"\n');
+
+    expect(derivePills(resolve(root, 'backend'), root)).toEqual([]);
+  });
+
   it('returns an empty array when neither the block nor the root has a package.json', () => {
     const root = createTempRepo();
     mkdirSync(resolve(root, 'src/auth'), { recursive: true });

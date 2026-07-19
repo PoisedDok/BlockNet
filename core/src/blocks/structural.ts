@@ -2,13 +2,21 @@
 // amended after Checkpoint A found the old name-list version collapsed real repos like
 // `frontend/`+`backend/`+`desktop/` into a single meaningless block): a breadth-first,
 // per-branch walk from rootDir's children. A directory that owns a `package.json` is a
-// "host" — a real, self-contained JS/TS project — and becomes one block; its own subtree is
-// never searched further, so a project's internal nested tooling doesn't fragment into extra
-// blocks. A directory that isn't a host is expanded one level deeper and the same check
-// applies to its children. No folder-name vocabulary anywhere: this is why it works on repos
-// that don't call their projects `apps/` or `packages/`.
-import { realpathSync } from 'node:fs';
+// "host" and becomes one block; its own subtree is never searched further, so a project's
+// internal nested tooling doesn't fragment into extra blocks. A directory that isn't a host
+// is expanded one level deeper and the same check applies to its children. No folder-name
+// vocabulary anywhere: this is why it works on repos that don't call their projects
+// `apps/`/`packages/`.
+//
+// Deliberately JS/TS-only (`hasPackageJson`), after a second Checkpoint A finding: widening
+// the host signal to other languages here — searched
+// recursively, up to 4 levels deep, from every branch — meant a single incidental non-JS
+// manifest anywhere in an unrelated corner of the repo (a `pyproject.toml` 4 levels down
+// inside a tooling/skills folder, nothing to do with the actual application) could "win" the
+// whole cascade over a much more relevant flat-fallback result. `other-languages.ts` covers
+// non-JS hosts instead — additively, top-level-only, never able to preempt this strategy.
 import { basename, join } from 'node:path';
+import { createRealPathDedup } from '../realpath-dedup.js';
 import { hasPackageJson, listChildDirectories, toBlockRelativePath } from './fs-utils.js';
 import type { BlockCandidate } from './internal-types.js';
 
@@ -21,35 +29,13 @@ import type { BlockCandidate } from './internal-types.js';
 // override is the v2 escape hatch for a heuristic miss, per ROADMAP-V2 v2.5).
 const MAX_DEPTH = 4;
 
-// The depth cap alone bounds recursion *depth*, not total cost: a symlink cycle with
-// branching factor B (e.g. two real directories each holding symlinks back to the other)
-// costs O(B^4) frontier entries — 2 real directories with 30 cross-symlinks each measured at
-// over 12 seconds, independent of any real file/directory count, before this guard existed.
-// Deduping by real (symlink-resolved) path caps total work at the number of *distinct real
-// directories* reachable within the depth cap, regardless of how many alias paths — cyclic
-// or not — lead to them: once a real directory has been visited via any path, every other
-// path to it is skipped outright, before either a package.json check or a recursive listing.
-function alreadyVisited(dir: string, visitedRealPaths: Set<string>): boolean {
-  let real: string;
-  try {
-    real = realpathSync(dir);
-  } catch {
-    return true; // unresolvable (broken symlink, race with a delete) — skip, never crash
-  }
-  if (visitedRealPaths.has(real)) return true;
-  visitedRealPaths.add(real);
-  return false;
-}
-
 export function detectStructuralBlocks(rootDir: string): BlockCandidate[] {
   const candidates: BlockCandidate[] = [];
-  const visitedRealPaths = new Set<string>();
-  try {
-    visitedRealPaths.add(realpathSync(rootDir));
-  } catch {
-    // rootDir itself unresolvable — every candidate walk below will fail identically and
-    // degrade to "no candidates found," never a crash.
-  }
+  // Bounds total *cost*, not just depth — see realpath-dedup.ts for why the depth cap alone
+  // isn't enough (a branching symlink cycle costs O(branching^4) without this). Seeding
+  // rootDir itself means an alias pointing back at the analyzed root is caught immediately.
+  const alreadyVisited = createRealPathDedup();
+  alreadyVisited(rootDir);
 
   let frontier = listChildDirectories(rootDir).map((name) => join(rootDir, name));
 
@@ -57,7 +43,7 @@ export function detectStructuralBlocks(rootDir: string): BlockCandidate[] {
     const nextFrontier: string[] = [];
 
     for (const dir of frontier) {
-      if (alreadyVisited(dir, visitedRealPaths)) continue;
+      if (alreadyVisited(dir)) continue;
 
       if (hasPackageJson(dir)) {
         const path = toBlockRelativePath(rootDir, dir);

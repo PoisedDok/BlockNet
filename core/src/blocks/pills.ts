@@ -2,24 +2,9 @@
 // declared dependencies — not a curated allowlist — so they stay honest as a repo's deps
 // change. `devDependencies` are included alongside `dependencies`: build-time tooling
 // (e.g. `tailwindcss`) is as real a signal of a block's tech stack as a runtime import.
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { hasOtherLanguageManifest, readPackageJson } from './fs-utils.js';
 
 type PackageJson = { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-
-// Distinguishes "no package.json here" (fine to fall back to the repo root's — the flat-repo
-// strategy's blocks never have their own) from "a package.json exists but is corrupt" (must
-// NOT fall back — silently attributing the root's unrelated dependencies to this block would
-// misrepresent its tech stack, worse than showing none at all).
-function readPackageJson(dir: string): { exists: boolean; pkg?: PackageJson } {
-  const path = join(dir, 'package.json');
-  if (!existsSync(path)) return { exists: false };
-  try {
-    return { exists: true, pkg: JSON.parse(readFileSync(path, 'utf-8')) as PackageJson };
-  } catch {
-    return { exists: true };
-  }
-}
 
 // A corrupted merge or bad codegen can leave `dependencies`/`devDependencies` as something
 // other than an object (an array, a string, ...). Object.keys() on those yields numeric
@@ -29,11 +14,23 @@ function depNames(value: unknown): string[] {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? Object.keys(value) : [];
 }
 
+function pillsFrom(pkg: Record<string, unknown>): string[] {
+  const typed = pkg as PackageJson;
+  const names = new Set([...depNames(typed.dependencies), ...depNames(typed.devDependencies)]);
+  return [...names].sort();
+}
+
 export function derivePills(blockDir: string, rootDir: string): string[] {
   const own = readPackageJson(blockDir);
-  const pkg = own.exists ? own.pkg : readPackageJson(rootDir).pkg;
-  if (!pkg) return [];
+  if (own.exists) return own.pkg ? pillsFrom(own.pkg) : [];
 
-  const names = new Set([...depNames(pkg.dependencies), ...depNames(pkg.devDependencies)]);
-  return [...names].sort();
+  // No package.json in this block. If it owns a different language's manifest (a block
+  // other-languages.ts detected), it's a real project of its own — falling back to the repo
+  // root's package.json would misattribute an unrelated JS project's dependencies as this
+  // block's tech stack. The root fallback below is only correct for the flat-repo strategy's
+  // blocks, which own no manifest of any kind.
+  if (hasOtherLanguageManifest(blockDir)) return [];
+
+  const rootPkg = readPackageJson(rootDir);
+  return rootPkg.pkg ? pillsFrom(rootPkg.pkg) : [];
 }

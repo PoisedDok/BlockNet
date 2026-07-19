@@ -1,6 +1,10 @@
 // Cascade entry point (docs/decisions/0005-blocks-auto-detected.md): first non-empty
 // strategy wins — workspaces/tsconfig-refs, then the generic structural host-walk, then the
-// flat-src fallback. Turns each strategy's raw candidates into full BlockNode[] with pills.
+// flat-src fallback. After that base cascade resolves (or comes up empty), an additive step
+// (other-languages.ts) checks rootDir's own top-level children for a non-JS project manifest
+// not already covered — this is how a real polyglot repo's Python/Go/Rust sibling shows up
+// as its own block even though the base 3 strategies are JS/TS-only. Turns the combined raw
+// candidates into full BlockNode[] with pills.
 //
 // Deliberately NOT done here: the synthetic "(root)" catch-all block the ADR describes. Its
 // existence depends on whether any real file fails to match every detected block's path
@@ -12,6 +16,7 @@ import { join } from 'node:path';
 import type { BlockNode } from '../types.js';
 import { detectFlatFallbackBlocks } from './flat-fallback.js';
 import type { BlockCandidate } from './internal-types.js';
+import { detectOtherLanguageTopLevelBlocks } from './other-languages.js';
 import { derivePills } from './pills.js';
 import { detectStructuralBlocks } from './structural.js';
 import { detectWorkspaceBlocks } from './workspaces.js';
@@ -30,10 +35,16 @@ function toBlockNodes(candidates: BlockCandidate[], rootDir: string): BlockNode[
 export function detectBlocks(rootDir: string): BlockNode[] {
   const strategies = [detectWorkspaceBlocks, detectStructuralBlocks, detectFlatFallbackBlocks];
 
+  let candidates: BlockCandidate[] = [];
   for (const strategy of strategies) {
-    const candidates = strategy(rootDir);
-    if (candidates.length > 0) return toBlockNodes(candidates, rootDir);
+    const found = strategy(rootDir);
+    if (found.length > 0) {
+      candidates = found;
+      break;
+    }
   }
 
-  return [];
+  candidates = [...candidates, ...detectOtherLanguageTopLevelBlocks(rootDir, candidates)];
+
+  return toBlockNodes(candidates, rootDir);
 }

@@ -90,6 +90,19 @@ describe('detectStructuralBlocks — generic host-detection walk, no hardcoded f
     expect(blocks).toEqual([{ name: 'real-app', path: 'real-app' }]);
   });
 
+  it('does not mistake a package.json vendored inside a build/dependency-output directory ' +
+    'for a real project — a real bug found after the multi-language work only widened ' +
+    'the exclude pattern for fileCount/edges, not this directory-listing traversal', () => {
+    const root = createTempRepo();
+    writePackageJson(root, 'vendor/some-composer-asset-pipeline');
+    writePackageJson(root, 'dist/some-npm-pack-output');
+    writePackageJson(root, 'target/pkg'); // e.g. wasm-pack's target/pkg/package.json
+    writePackageJson(root, 'real-app');
+
+    const blocks = detectStructuralBlocks(root);
+    expect(blocks).toEqual([{ name: 'real-app', path: 'real-app' }]);
+  });
+
   it('follows a symlinked host directory instead of silently dropping it', () => {
     const root = createTempRepo();
     // Real target lives under node_modules (pnpm/Nx-style linking) so it is NOT
@@ -111,6 +124,17 @@ describe('detectStructuralBlocks — generic host-detection walk, no hardcoded f
 
     const blocks = detectStructuralBlocks(root);
     expect(blocks).toEqual([{ name: 'frontend', path: 'frontend' }]);
+  });
+
+  it('does NOT recognize a non-JS manifest (e.g. pyproject.toml) as a host — that\'s ' +
+    'other-languages.ts\'s job, additively, not this recursive strategy\'s (a second ' +
+    'Checkpoint A finding: recognizing it here let one incidental non-JS manifest anywhere ' +
+    'in the tree hijack the whole cascade)', () => {
+    const root = createTempRepo();
+    mkdirs(root, 'backend');
+    writeFileSync(resolve(root, 'backend/pyproject.toml'), '[project]\nname = "backend"\n');
+
+    expect(detectStructuralBlocks(root)).toEqual([]);
   });
 
   it('returns no candidates when nothing hosts anywhere within the depth cap', () => {

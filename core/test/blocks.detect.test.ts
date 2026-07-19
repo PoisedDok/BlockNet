@@ -83,4 +83,31 @@ describe('detectBlocks — cascade (docs/decisions/0005-blocks-auto-detected.md)
 
     expect(detectBlocks(root)).toEqual([]);
   });
+
+  it('adds a non-JS top-level sibling (e.g. a Python backend) alongside blocks the base ' +
+    'cascade already found, matching the real AetherArenaV2 shape end to end', () => {
+    const root = createTempRepo();
+    writeJson(resolve(root, 'frontend/package.json'), { name: 'frontend', dependencies: { react: '^18.0.0' } });
+    mkdirSync(resolve(root, 'backend'), { recursive: true });
+    writeFileSync(resolve(root, 'backend/pyproject.toml'), '[project]\nname = "backend"\n');
+
+    const blocks = detectBlocks(root);
+    expect(blocks.map((b) => b.path).sort()).toEqual(['backend', 'frontend']);
+
+    const backend = blocks.find((b) => b.path === 'backend');
+    // No package.json of its own — must not inherit the (nonexistent, here) root's pills.
+    expect(backend?.pills).toEqual([]);
+  });
+
+  it('does not add a non-JS block for a manifest nested below the top level — that would ' +
+    'require the same unbounded-blast-radius recursion Checkpoint A found and removed', () => {
+    const root = createTempRepo();
+    writeJson(resolve(root, 'frontend/package.json'), { name: 'frontend' });
+    const nested = resolve(root, 'project/agent-skills/red-team-skills/ct-analysis');
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(resolve(nested, 'pyproject.toml'), '');
+
+    const blocks = detectBlocks(root);
+    expect(blocks.map((b) => b.path)).toEqual(['frontend']);
+  });
 });
