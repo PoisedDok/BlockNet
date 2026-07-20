@@ -81,6 +81,41 @@ describe('analyze — flat-repo fixture has no risks', () => {
   });
 });
 
+describe('analyze — a cycle touching the "(root)" synthetic block', () => {
+  it('flags the root-touching cycle with a real BlockNode and Edge to attach to — no ' +
+    'dangling reference, since any file resolving to ROOT_BLOCK_ID is also found by the ' +
+    'same walkRealFiles pass that decides whether to append the "(root)" block at all', async () => {
+    const dir = createTempRepo();
+    writeJson(resolve(dir, 'package.json'), { name: 'root', workspaces: ['packages/*'] });
+    writeJson(resolve(dir, 'packages/a/package.json'), { name: 'a' });
+    writeText(resolve(dir, 'packages/a/index.ts'), "import { x } from '../../orphan.js';\nexport { x };\n");
+    writeText(resolve(dir, 'orphan.ts'), "import { y } from './packages/a/index.js';\nexport const x = 1;\nconsole.log(y);\n");
+
+    const result = await analyze({ rootDir: dir });
+
+    const rootBlock = result.blocks.find((b) => b.id === '(root)');
+    expect(rootBlock).toBeDefined();
+
+    const circular = result.risks.filter((r) => r.tag === 'CIRCULAR');
+    expect(circular.length).toBeGreaterThan(0);
+    expect(circular.some((r) => r.source === '(root)' || r.target === '(root)')).toBe(true);
+
+    // Every risk's source/target must resolve to a real BlockNode — proves no dangling
+    // reference into a block id that was never appended to the result.
+    const blockIds = new Set(result.blocks.map((b) => b.id));
+    for (const risk of result.risks) {
+      expect(blockIds.has(risk.source)).toBe(true);
+      expect(blockIds.has(risk.target)).toBe(true);
+    }
+
+    // The matching block Edge must exist and carry the risk — not just float in risks[].
+    for (const risk of circular) {
+      const matchingEdge = result.edges.find((e) => e.source === risk.source && e.target === risk.target);
+      expect(matchingEdge?.risk?.tag).toBe('CIRCULAR');
+    }
+  });
+});
+
 describe('analyze — a clean synthetic repo has zero risks', () => {
   it('produces no false positives on an ordinary two-block repo with a single one-way entry import', async () => {
     const dir = createTempRepo();

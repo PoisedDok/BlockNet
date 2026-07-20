@@ -95,12 +95,21 @@ function deriveAliases(rootDir: string, logger: Logger): Record<string, string> 
 export async function runDependencyCruise(
   rootDir: string,
   logger: Logger = createLogger(),
+  // Present → cache/invalidate.ts's scoped delta path (docs/decisions/0008 rule 1): cruise
+  // only these entry files instead of the whole tree. dependency-cruiser still transitively
+  // expands into whatever these files import (confirmed by direct testing, matching this
+  // project's established "verify dependency-cruiser behavior before relying on it"
+  // discipline — see docs/planning/PROGRESS.md's Task 3 entry) — that's fine, since the
+  // caller only keeps the modules whose OWN source is in this list and discards the rest;
+  // it never writes back an unrelated, unchanged file's re-derived (and therefore identical)
+  // edges. Absent → full-tree cruise, unchanged from before Task 5.
+  entryFiles?: string[],
 ): Promise<ICruiseResult> {
   const realRootDir = realpathSync(rootDir);
   const alias = deriveAliases(realRootDir, logger);
 
   const result = await cruise(
-    ['.'],
+    entryFiles ?? ['.'],
     {
       baseDir: realRootDir,
       exclude: { path: EXCLUDE_PATTERN_SOURCE },

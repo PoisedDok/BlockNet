@@ -65,6 +65,22 @@ describe('runDependencyCruise — checked-in monorepo fixture', () => {
   });
 });
 
+describe('runDependencyCruise — scoped entry files (cache/invalidate.ts\'s delta path)', () => {
+  const fixture = resolve(import.meta.dirname, 'fixtures/monorepo');
+
+  it('when given specific entry files, still resolves that file\'s own real dependency correctly', async () => {
+    const result = await runDependencyCruise(fixture, createLogger(), ['packages/b/src/index.ts']);
+    const deps = depsOf(result, 'packages/b/src/index.ts');
+    expect(deps.some((d) => d.resolved === 'packages/b/src/internal.ts')).toBe(true);
+  });
+
+  it('scoped to one entry file finds strictly fewer (or equal) modules than a full cruise of the whole fixture', async () => {
+    const full = await runDependencyCruise(fixture);
+    const scoped = await runDependencyCruise(fixture, createLogger(), ['packages/b/src/index.ts']);
+    expect(scoped.modules.length).toBeLessThan(full.modules.length);
+  });
+});
+
 describe('runDependencyCruise — build-output dot-directories', () => {
   it('excludes .next (and other dot-directories) even though they are not literally named dist/build/out/coverage', async () => {
     const dir = createTempRepo();

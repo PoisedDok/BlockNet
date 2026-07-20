@@ -110,6 +110,27 @@ describe('runRiskChecks — both tags on the SAME directed block pair', () => {
   });
 });
 
+describe('runRiskChecks — cycles touching the "(root)" synthetic block', () => {
+  it('flags a cycle between an unclassified file and a real block as CIRCULAR — root is ' +
+    'not excluded from CIRCULAR the way it is from BOUNDARY, since a cycle is a raw graph ' +
+    'fact regardless of whether one file happens to be unclassified', () => {
+    const root = createTempRepo();
+    writeText(resolve(root, 'p/index.ts'), 'export {};\n');
+    writeText(resolve(root, 'scripts/build.ts'), 'export {};\n');
+    const blocks = [block('p')];
+    const fileEdges = [fileEdge('scripts/build.ts', 'p/index.ts'), fileEdge('p/index.ts', 'scripts/build.ts')];
+    const edges = [blockEdge('(root)', 'p'), blockEdge('p', '(root)')];
+
+    const result = runRiskChecks(fileEdges, blocks, edges, root);
+
+    expect(result.risks).toHaveLength(2);
+    expect(result.risks.every((r) => r.tag === 'CIRCULAR')).toBe(true);
+    expect(result.risks.map((r) => `${r.source}->${r.target}`).sort()).toEqual(['(root)->p', 'p->(root)']);
+    expect(result.edges.find((e) => e.id === '(root)->p')?.risk?.tag).toBe('CIRCULAR');
+    expect(result.edges.find((e) => e.id === 'p->(root)')?.risk?.tag).toBe('CIRCULAR');
+  });
+});
+
 describe('runRiskChecks — clean graph', () => {
   it('returns no risks and leaves every Edge.risk undefined when nothing is wrong', () => {
     const root = createTempRepo();

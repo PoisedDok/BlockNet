@@ -95,6 +95,20 @@ describe('findBoundaryViolations — package.json main field', () => {
 
     expect(findBoundaryViolations([fileEdge('a.ts', 'packages/c/dist/index.ts')], blocks, root)).toEqual([]);
   });
+
+  it('resolves a .mts/.cts declared entry — dependency-cruiser parses both as TS-compatible ' +
+    '(tsPreCompilationDeps), and a native-ESM/CJS-TS package declaring one is a real, not ' +
+    'exotic, pattern (e.g. a vite.config.mts-style package)', () => {
+    const root = createTempRepo();
+    writeJson(resolve(root, 'packages/c/package.json'), { name: 'c', main: './index.mts' });
+    writeText(resolve(root, 'packages/c/index.mts'), 'export const x = 1;\n');
+    writeText(resolve(root, 'packages/c/internal.cts'), 'export const y = 1;\n');
+    const blocks = [block('packages/c', 'packages/c')];
+
+    expect(findBoundaryViolations([fileEdge('a.ts', 'packages/c/index.mts')], blocks, root)).toEqual([]);
+    const violation = fileEdge('a.ts', 'packages/c/internal.cts');
+    expect(findBoundaryViolations([violation], blocks, root)).toEqual([violation]);
+  });
 });
 
 describe('findBoundaryViolations — package.json exports map', () => {
@@ -112,6 +126,37 @@ describe('findBoundaryViolations — package.json exports map', () => {
     expect(findBoundaryViolations([fileEdge('a.ts', 'packages/c/src/index.ts')], blocks, root)).toEqual([]);
     expect(findBoundaryViolations([fileEdge('a.ts', 'packages/c/src/utils.ts')], blocks, root)).toEqual([]);
     const violation = fileEdge('a.ts', 'packages/c/src/internal.ts');
+    expect(findBoundaryViolations([violation], blocks, root)).toEqual([violation]);
+  });
+
+  it('accepts an import matching a wildcard subpath ("./*": "./src/*.ts") — a common real ' +
+    'pattern for intentionally exposing an entire subtree, not just named subpaths', () => {
+    const root = createTempRepo();
+    writeJson(resolve(root, 'packages/c/package.json'), {
+      name: 'c',
+      exports: { '.': './src/index.ts', './*': './src/*.ts' },
+    });
+    writeText(resolve(root, 'packages/c/src/index.ts'), 'export {};\n');
+    writeText(resolve(root, 'packages/c/src/utils.ts'), 'export {};\n');
+    writeText(resolve(root, 'packages/c/src/features/x.ts'), 'export {};\n');
+    const blocks = [block('packages/c', 'packages/c')];
+
+    expect(findBoundaryViolations([fileEdge('a.ts', 'packages/c/src/utils.ts')], blocks, root)).toEqual([]);
+    // Node's exports wildcard matches one-or-more path segments, including nested ones.
+    expect(findBoundaryViolations([fileEdge('a.ts', 'packages/c/src/features/x.ts')], blocks, root)).toEqual([]);
+  });
+
+  it('still flags a path that does NOT match any declared wildcard pattern', () => {
+    const root = createTempRepo();
+    writeJson(resolve(root, 'packages/c/package.json'), {
+      name: 'c',
+      exports: { '.': './src/index.ts', './*': './src/*.ts' },
+    });
+    writeText(resolve(root, 'packages/c/src/index.ts'), 'export {};\n');
+    writeText(resolve(root, 'packages/c/other/secret.ts'), 'export {};\n');
+    const blocks = [block('packages/c', 'packages/c')];
+
+    const violation = fileEdge('a.ts', 'packages/c/other/secret.ts');
     expect(findBoundaryViolations([violation], blocks, root)).toEqual([violation]);
   });
 
