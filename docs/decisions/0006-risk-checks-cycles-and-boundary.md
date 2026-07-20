@@ -92,3 +92,25 @@ blocks; the other three have zero crossing edges of any kind, established during
 Checkpoint A's earlier real-repo review). The true-positive path is verified by the
 checked-in monorepo fixture (byte-checked evidence) and extensive synthetic Tarjan/
 declared-entry unit tests, not yet by a real repo naturally triggering one.
+
+**3. `exports` wildcard subpaths (`"./*": "./src/*.ts"`) are patterns, not literal paths —
+found by the mandatory two-pass adversarial review, not by the Checkpoint A real-repo set.**
+A leaf containing `*` (Node's own wildcard-subpath syntax, a mainstream pattern for
+intentionally exposing an entire subtree at once) was being handed to the same
+filesystem-existence resolver literal leaves use, which can never find a file whose declared
+path contains a literal `*` — every import through such a subpath was flagged BOUNDARY.
+Fixed: a wildcard leaf compiles to a `RegExp` (`*` → one-or-more characters, including
+further `/`s, per Node's semantics) matched directly against the already-resolved
+`FileEdge.targetFile`, bypassing filesystem resolution entirely — a wildcard pattern has no
+single real file to search for; the pattern itself is the complete answer.
+
+**4. `CIRCULAR` does not exclude the `"(root)"` synthetic block as a target, even though
+`BOUNDARY` does — a deliberate asymmetry, examined and confirmed correct, not left as an
+unnoticed gap.** BOUNDARY excludes root because root has no designed public surface to
+violate at all; CIRCULAR is a raw graph fact (SCC membership) that doesn't care whether a
+file happens to be unclassified — hiding a real cycle because one of its files landed in
+`(root)` would misrepresent the truth this engine exists to report. Confirmed this can never
+produce a dangling reference (a risk pointing at a block id absent from the result): any file
+whose file-edge resolves to `ROOT_BLOCK_ID` is, by construction, a file `analyze.ts`'s
+`walkRealFiles` pass also finds, which is exactly what decides whether the `"(root)"`
+`BlockNode`/`Edge` gets appended at all — proven with a full-pipeline test, not just argued.

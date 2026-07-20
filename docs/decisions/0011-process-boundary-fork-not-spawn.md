@@ -38,3 +38,38 @@ adapters over the same `analyze()` — see `docs/architecture/PROCESS-BOUNDARY.m
 full sequence diagram. Neither file may contain analysis logic; a bug found via the CLI
 must be reproducible via the extension path and vice versa, because both call the identical
 function.
+
+## Amendment — 2026-07-20 (Task 6 implementation findings)
+
+Building the actual fork wiring surfaced two build-level facts this ADR didn't anticipate,
+both confirmed empirically (not guessed), both now load-bearing:
+
+1. **The forked file must be ESM, and cannot be re-bundled by the extension's own (CJS)
+   esbuild.** `dependency-cruiser` — a transitive import of `analyze()` — has real top-level
+   `await` in some of its own source files. `require()`-ing an ESM graph containing
+   top-level await throws `ERR_REQUIRE_ASYNC_MODULE` (confirmed directly:
+   `node -e "require('./core/dist/index.js')"` fails this exact way), and esbuild refuses to
+   lower top-level await into a CJS *output* at all. Since the worker always runs as its own
+   standalone forked process — never `require()`-d by anything — there's no reason it needs
+   to match the extension host bundle's CJS format. `extension/esbuild.config.ts` copies
+   `core/dist/ipc-worker.js` (already built by `core/tsup.config.ts`) into
+   `extension/dist/ipc-worker.mjs` verbatim, rather than re-bundling `core/src/ipc-worker.ts`
+   from source a second time — reusing an artifact `core/test/ipc-worker.test.ts` already
+   verifies directly is simpler than getting two different bundlers to agree on the same
+   file, and a first attempt at re-bundling it with esbuild hit a second, unrelated
+   esbuild-specific resolution failure (a deep import inside one of dependency-cruiser's
+   optional integrations) that tsup's bundler already tolerates correctly.
+2. **`core/tsup.config.ts` needed `splitting: false`.** tsup's default multi-entry behavior
+   shares code across entries that import overlapping modules via a separate chunk file —
+   every one of core's entries touches `analyze.ts`'s graph, so `ipc-worker.js` depended on a
+   sibling chunk file that lived only in `core/dist/`. Copying `ipc-worker.js` out of that
+   directory in isolation (point 1, above) silently broke: the copied file still `import`-ed
+   a chunk that never made the trip, failing at `fork()` time with `ERR_MODULE_NOT_FOUND`,
+   not at build time. `splitting: false` makes every core dist entry fully self-contained,
+   which is what makes copying any single one of them in isolation safe.
+
+Neither finding changes the decision itself (`fork()`, one-shot, structured IPC) — both are
+implementation details of *how the forked file gets built and where it lives on disk*, now
+documented so a future rebuild of this wiring doesn't have to rediscover them the hard way.
+See `docs/architecture/PROCESS-BOUNDARY.md`'s "Where the forked file physically lives"
+section for the full mechanism.
