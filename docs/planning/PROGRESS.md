@@ -8,10 +8,10 @@ not rewrite TASKS-V1.md/ROADMAP-V2.md themselves (`CLAUDE.md`).
 
 | Phase | Status |
 |---|---|
-| Phase 1 — Engine (Tasks 1-5) | Tasks 1-4 done. Task 5 not started. |
+| Phase 1 — Engine (Tasks 1-5) | Tasks 1-5 done. |
 | Checkpoint A (truth gate) | Signed off with Krish 2026-07-19 — see below. |
-| Checkpoint B (engine complete) | Not reached. |
-| Phase 2 — Extension (Tasks 6-9) | Not started — blocked on Checkpoint B. |
+| Checkpoint B (engine complete) | Reached 2026-07-19 — see Task 5's entry. `graph.json` schema frozen. |
+| Phase 2 — Extension (Tasks 6-9) | Task 6 done, two-pass review reconciled (1 real bug found + fixed). Pending: real F5 manual verification (no VS Code GUI in the building environment — see Task 6's entry). Tasks 7-9 not started. |
 | Phase 3 — Ship (Task 10) | Not started. |
 
 ## Done
@@ -483,11 +483,13 @@ task — see below). Built in `core/src/risks/`:
 - `blocks/fs-utils.ts` gained a shared `readPackageJson` (pills.ts's private copy generalized
   and reused by boundary.ts — the same "same logic starts drifting into a second copy" pattern
   this session already fixed twice for other helpers).
-- 33 new tests: `risks.cycles.test.ts` (9, incl. both 20k-node scale tests), `risks.boundary
-  .test.ts` (15, incl. exports/main/conventional-index resolution and the real fixture spot
-  check), `risks.index.test.ts` (5, incl. the both-tags-on-one-pair priority case),
-  `analyze.risks.test.ts` (6, real fixture end-to-end + riskCount tallying + a clean-repo
-  no-false-positive case). 200/200 total, build/typecheck/lint clean.
+- 39 new tests (after the two-pass review round below added its own): `risks.cycles.test.ts`
+  (9, incl. both 20k-node scale tests), `risks.boundary.test.ts` (17, incl. exports/main/
+  conventional-index resolution, the wildcard-subpath case, and the real fixture spot check),
+  `risks.index.test.ts` (6, incl. the both-tags-on-one-pair priority case and a root-touching
+  cycle), `analyze.risks.test.ts` (7, real fixture end-to-end + riskCount tallying + a
+  clean-repo no-false-positive case + a root-touching-cycle no-dangling-reference proof).
+  204/204 total, build/typecheck/lint clean.
 
 **Real bug found and fixed during Checkpoint-A re-validation, before this task could be
 called done:** the first working version of `boundary.ts` flagged **100% of `aetherinc`'s
@@ -512,16 +514,360 @@ by the checked-in monorepo fixture (byte-checked evidence: the exact `b↔c` cyc
 deep import it was built for) and extensive synthetic unit tests, not yet by a real repo
 naturally triggering one. Revisit if a future real repo does.
 
+**Two-pass adversarial review done** (doc-consistency + architectural-soundness, dispatched
+as two independent, parallel background agents per `CLAUDE.md`'s ritual — neither saw the
+other's output or the author's own reasoning). Two more real bugs found, both fixed:
+
+1. **`boundary.ts` couldn't resolve `exports` wildcard subpaths (`"./*": "./src/*.ts"`)** — a
+   mainstream real-world pattern for intentionally exposing an entire subtree, not an exotic
+   shape. The wildcard leaf was collected as a literal string and handed to the same
+   `existsSync`-based resolver as a normal path, which can never find a file with a literal
+   `*` in it — every import through such a subpath was flagged BOUNDARY, a false positive on
+   sight. Fixed: a leaf containing `*` is now compiled to a `RegExp` (Node's own semantics:
+   `*` matches one-or-more characters, including further `/`s) and matched directly against
+   the already-resolved `FileEdge.targetFile`, bypassing the filesystem-existence resolver
+   entirely — there's no single real file to search for a wildcard leaf, the pattern itself
+   is the full answer. 2 new tests (`risks.boundary.test.ts`): a wildcard match accepted, and
+   a path outside the wildcard's scope still correctly flagged.
+2. **`CIRCULAR` and `BOUNDARY` disagreed, silently, on whether the `"(root)"` synthetic block
+   is ever excluded** — `boundary.ts` explicitly excludes it as a target (documented,
+   deliberate), but `risks/index.ts`'s cross-block filter for `CIRCULAR` never did, and
+   nothing said why not. Investigated rather than reflexively matched to boundary's
+   exclusion: concluded the asymmetry is *correct*, not a bug — BOUNDARY is about a designed
+   public surface, which root categorically has none of, but CIRCULAR is a raw graph fact
+   (SCC membership) that doesn't care whether a file happens to be unclassified; hiding a
+   real cycle because one of its files landed in `(root)` would misrepresent the truth this
+   engine exists to report. Also directly disproved the reviewer's secondary "dangling
+   reference" concern (a risk pointing at a `(root)` that was never appended as a
+   `BlockNode`) with a full `analyze()`-pipeline test: any file whose edge resolves to
+   `ROOT_BLOCK_ID` is, by construction, a file `walkRealFiles` also finds, which is exactly
+   what flips `hasRootFiles` true and appends the block/Edge the risk attaches to — never
+   dangling. Fixed by making the asymmetry explicit and documented (`risks/index.ts`'s header
+   comment) rather than leaving it an unexamined gap, plus 2 new tests locking in the decision
+   (`risks.index.test.ts`'s root-touching-cycle case, `analyze.risks.test.ts`'s end-to-end
+   no-dangling-reference proof).
+
+Also found and fixed by the doc-consistency lane: this very file claimed "33 new tests" in a
+sentence whose own listed per-file breakdown summed to 35, not 33 — simple arithmetic error,
+now corrected (and the total has since moved again to 204, from the two fixes above).
+
+Everything else both lanes checked came back clean: the iterative Tarjan implementation was
+independently cross-validated against a from-scratch recursive Kosaraju reference on
+hand-built adversarial graphs (nested/adjacent SCCs, a high-in-degree hub, chorded cycles) and
+at real scale (a 100,000-node linear chain, a 50,000-node/205,000-edge layered graph with 200
+planted cycles, a 20,000-node graph with 500 planted SCCs) — zero mismatches, no stack
+overflow, sub-100ms. `exports`/`main` edge cases (array-form exports, condition-only exports
+with no `"."` key, an empty-string `main`, path-escape containment) were each independently
+constructed and checked, not just read. `readPackageJson`'s extraction into `fs-utils.ts` was
+confirmed behavior-preserving. Docs cross-checked line-by-line against the actual code
+(ADR-0006's amendment, `DIRECTORY-TREE.md`'s `risks/`/`fs-utils.ts` entries), no dead code, no
+hedge language, no broken cross-references.
+
+204/204 tests pass, build/typecheck/lint clean after both fixes.
+
+### Task 5 — Cache + incremental invalidation ✅ (2026-07-19)
+ADR: [decisions/0008](../decisions/0008-caching-incremental-invalidation.md) (amended this
+task — see its Amendment section for the three implementation-level decisions below). Built
+in `core/src/cache/`:
+- `manifest.ts` — builds a `CacheManifest`: per-file content hash, plus one `configHash`
+  covering every `package.json`/`tsconfig.json` found anywhere in the tree (not just
+  rootDir's own), so an alias map or `exports`/`main` change anywhere forces a full bust.
+  A file outside TS/JS's resolvable extensions gets a constant placeholder hash instead of a
+  real content read — see the real-repo bug below for why this isn't optional.
+- `invalidate.ts` — `planInvalidation(previous, current)` diffs two manifests into one of
+  five `InvalidationPlan` kinds, in a deliberate priority order (cold → config-changed →
+  structural-changed → unchanged → content-changed), each stated in the module's header
+  comment along with why the order can't be reordered.
+- `store.ts` — persists the manifest, the last `GraphResult` snapshot, and the pre-
+  aggregation `FileEdge[]` the delta path merges into, together in ONE JSON file (write-temp-
+  then-rename), not three independently-atomic ones — seeded by a real correctness concern
+  (a crash between two separate atomic writes could pair a fresh manifest with a stale
+  snapshot and the mismatch would never self-heal), not just cleanliness.
+- `analyze.ts` rewritten to branch on the invalidation plan: `unchanged` returns the cached
+  snapshot verbatim (near-instant); `content-changed` re-cruises only the modified files
+  (`edges/depcruise-runner.ts` gained an optional `entryFiles` parameter for this — verified
+  by direct testing that dependency-cruiser transitively expands from a scoped entry rather
+  than reporting only that one file, so the caller filters the result to just the modified
+  files' own edges, matching this project's established "verify dependency-cruiser behavior
+  before relying on it" discipline) and splices the result into the cached file-edge graph;
+  everything else (cold, config-changed, structural-changed) runs the full pipeline unchanged
+  and writes a fresh cache. Tarjan/CIRCULAR always runs over the full merged edge list on
+  every path, per the ADR — never incrementally scoped. Manifest-building (and therefore all
+  cache work) is fully skipped when `cacheDir` isn't passed at all — a CLI/CI call with no
+  `--cache-dir` pays none of the hashing cost.
+- 49 new tests: `cache.manifest.test.ts` (15), `cache.store.test.ts` (10),
+  `cache.invalidate.test.ts` (10), `analyze.cache.test.ts` (11, end-to-end on a mutated temp
+  repo — cold start, unchanged-is-a-cache-hit-and-measurably-faster, content-changed edge
+  add/remove, config-change bust, structural add/remove bust), 2 added to
+  `edges.depcruise-runner.test.ts` for the new scoped-entry-files behavior, and 1 added to
+  `risks.boundary.test.ts` for the `.mts`/`.cts` fix below. 256/256 total, build/typecheck/
+  lint clean.
+
+**Real bug found and fixed during real-repo validation, before this task could be called
+done:** the first working version of `manifest.ts` read every real file's full content to
+hash it (`readFileSync(path, 'utf-8')`), needed to detect which files changed for the delta
+path. Re-running the Checkpoint A real-repo validation loop (mandatory after any change
+touching analysis behavior) found `aetherinc` had grown a 504MB checked-in Docker image
+archive and two 69MB PDFs since Task 3 — reading all of it turned a claimed near-instant
+warm-cache run into ~10.1 seconds, on every single call, cache hit or not, since the
+`unchanged` fast path still has to hash every file to *know* nothing changed. Root cause:
+a non-TS/JS file's content can never produce or change a `FileEdge` (import/edge analysis is
+TS/JS-only, decisions/0004) — only its *existence* matters, already tracked via the
+manifest's key set regardless of what hash value is stored for it. Fixed: `manifest.ts` only
+reads real content for `package.json`/`tsconfig.json` and files matching a
+`SOURCE_EXTENSIONS` set mirroring `risks/boundary.ts`'s `RESOLVABLE_EXTENSIONS`; every other
+file gets a constant, content-independent placeholder hash, so its bytes are never read
+regardless of size.
+
+**Two-pass adversarial review done** (doc-consistency + architectural-soundness, dispatched
+as two independent, parallel background agents per `CLAUDE.md`'s ritual). Four more real
+issues found, all fixed:
+1. **`.mts`/`.cts` were missing from both `manifest.ts`'s `SOURCE_EXTENSIONS` and
+   `risks/boundary.ts`'s pre-existing `RESOLVABLE_EXTENSIONS`** — dependency-cruiser parses
+   both as TS-compatible (`tsPreCompilationDeps: true`), so a real edit inside, say, a
+   `vite.config.mts` was silently misclassified as a non-source change: its hash never
+   moved, `planInvalidation` never saw it as dirty, and the cache would have served stale
+   edges/risks indefinitely. Confirmed by direct reproduction (reviewer built and ran a
+   script proving the stale-serve). Fixed both extension lists, plus `boundary.ts`'s
+   extension-strip regex in `resolveDeclaredPath`; 1 regression test added to each of
+   `cache.manifest.test.ts` and `risks.boundary.test.ts`.
+2. **The content-changed merge in `analyze.ts` used `Array.includes()` instead of a `Set`**
+   to filter cached edges against the modified-files list — O(cachedEdges × modifiedFiles)
+   instead of O(cachedEdges). Benchmarked by the reviewer: 300k edges / 5k modified files =
+   3.68s with `.includes()` vs 19ms with `Set.has()`. A repo-wide reformat or branch switch
+   on a real 50k-file repo could plausibly hit this scale, which would have made the
+   "instant delta" path slower than the full cold scan it exists to replace. Fixed: the
+   merge now builds a `Set` once per call.
+3. **`analyze.ts` built a full `CacheManifest` (hashing every content-relevant file)
+   unconditionally, even when `cacheDir` was never passed** — directly contradicting the
+   function's own header comment ("no cacheDir at all → today's plain full scan, unchanged,
+   never cached"). A CLI/CI caller that never passes `--cache-dir` was paying the full
+   hashing cost for a manifest nothing would ever read or write. Fixed: manifest-building
+   (and the invalidation plan) is now gated behind `options.cacheDir !== undefined`.
+4. **`CacheManifest.files[path].blockId` was computed (via `resolveBlock`) but read by
+   nothing** — not `invalidate.ts`, not `store.ts`, not `analyze.ts` on cache read-back.
+   Computing it doubled `resolveBlock`'s already-flagged O(files×blocks) cost per full scan
+   for a field with zero consumers. Since `CacheManifest` is a purely internal cache-file
+   format (unlike `GraphResult`, nothing outside `core/cache`/`analyze.ts` depends on its
+   shape), removing the unused field was the more disciplined fix than wiring it to a
+   speculative future consumer — `types.ts`'s `CacheManifest` no longer has a `blockId`
+   field, and `buildManifest()` no longer takes a `blocks` parameter at all.
+
+Also corrected in the same pass: `AnalyzeOptions.changedFiles`'s docstring falsely implied
+`cache/invalidate.ts` reads it — it doesn't; Task 5's invalidation is entirely
+manifest-diff-based, by deliberate design (ADR-0008: "the manifest ... used to decide what,
+if anything, is now stale"), not a caller-supplied hint. Comment corrected to say the field
+is reserved for Task 6's watcher integration and currently unread, with the "should a
+watcher hint let analyze() skip hashing the full tree" question left open rather than
+guessed at now. `docs/planning/PROGRESS.md`'s own "Deferred by design" section (below) had
+said `core/src/ipc-worker.ts` "arrives with Task 5" — wrong; it's Task 6's
+`child_process.fork()` entrypoint, bundled there with progress-message wiring and
+`analysis-runner.ts` as one coherent unit (`docs/architecture/PROCESS-BOUNDARY.md`). Fixed
+below.
+
+Re-verified against all 4 Checkpoint A real repos after every fix above (read-only `analyze`
+runs only — no repo was mutated): `aetherinc` (1,025 files) no-cacheDir ~287ms, cold-with-
+cacheDir ~195ms, warm (unchanged) ~38ms; `AetherArenaV2` (6,550 files) no-cacheDir ~5.4s,
+cold ~4.0s, warm ~246ms; `aether-proxy` and BlockNet-on-itself both correspondingly fast.
+Block/edge/risk counts identical across all three modes on every repo — none of these fixes
+changed *what* gets computed, only *when* work is skipped or how efficiently it's merged.
+
+Everything else both lanes checked came back clean: multi-window write-temp-then-rename
+atomicity was stress-tested empirically (3 concurrent processes × 500 writes + a concurrent
+reader looping for 3s — zero torn reads, zero corrupt state); `entryFiles` scoping confirmed
+cwd-independent (dependency-cruiser resolves entry paths via `baseDir`, not `process.cwd()`);
+a renamed/moved file was confirmed to always land in `structural-changed` (full bust), never
+the scoped delta path; hash oscillation (edit-then-undo) was confirmed to have no stuck-state
+risk since each run only diffs against the immediately-prior manifest; the removed-import
+case was confirmed correct (old edges for a modified source are wholly replaced, not merged
+additively); all doc cross-links resolved and no hedge language was found in any touched
+ground-truth doc.
+
+256/256 tests pass, build/typecheck/lint clean after all fixes.
+
+## Checkpoint B — engine complete (2026-07-19)
+
+The public `graph.json` schema (`GraphResult`/`BlockNode`/`Edge`/`Risk`/`AnalysisMeta`) is
+frozen as of Task 5 — none of these types changed to build caching. `types.ts`'s internal,
+cache-only `CacheManifest` type did change (its unused `blockId` field was removed during
+this task's own adversarial review, before ever shipping to a consumer — see above), and
+`AnalyzeOptions.changedFiles`'s docstring was corrected — neither is part of the frozen
+public surface extension/webview code will ever consume. All core tests pass (256/256), the
+CLI is honest, fast, and incremental on real repos (measured above, not asserted). Per
+`CLAUDE.md`'s "No UI before the truth gate," `extension/` may now begin — Task 6 is next.
+
+### Task 6 — Extension host: activation, forked child process, progress, cache wiring ✅ (2026-07-20)
+
+**What shipped.** `core/src/ipc-worker.ts` (thin `child_process.fork()` adapter over
+`analyze()`, structured `process.send({type:'progress'|'result'|'error', ...})`, one-shot —
+waits to be killed rather than self-exiting). `analyze()` itself now actually calls
+`onProgress` at all four phase boundaries (`blocks`/`edges`/`risks`/`cache`, matching
+`FLOWS.md`'s "progress(blocks,1/4)...(cache,4/4)" diagram exactly) — previously declared in
+`types.ts` but never invoked; this was a real, previously-undetected gap, not new scope.
+`extension/` now exists as an npm workspace (`@blocknet/extension`) with: `analysis-runner.ts`
+(fork lifecycle + monotonic generation-id tagging/superseding, `FLOWS.md` §2a),
+`cache-bridge.ts` (`context.storageUri` → cache dir), `change-buffer.ts` + `watcher.ts`
+(debounced ~500ms file-system watcher, config/structural/content classification per
+decisions/0008's priority order), `panel.ts` (WebviewPanel lifecycle + a placeholder body),
+`extension.ts` (lazy activation) and `commands/show-architecture.ts` (the command itself).
+Root `package.json`'s `workspaces` now lists `["core", "extension"]`.
+
+**Deliberately out of scope for this task** (not gaps — named here so no one "completes"
+Task 6 by silently building ahead into a later task's territory):
+- The real webview (`extension/webview/`, React Flow, `BlockCanvas.tsx`, design tokens) is
+  Task 7's. `panel.ts` ships a minimal inline-HTML placeholder (progress text + a raw JSON
+  dump) that proves the `postMessage` wiring end to end — Task 7 replaces its body wholesale,
+  not incrementally.
+- `state.ts` (workspaceState position persistence) is Task 8's. `git.ts` and
+  `commands/open-file.ts` are Task 9's. None of the three exist yet.
+- The no-workspace / multi-root-workspace degrade states render as static bodies chosen at
+  panel-creation time (`panel.ts`'s `PanelState`), not the real `EmptyState.tsx` component
+  Tasks 7–8 own — a deliberate, temporary stand-in so `ENGINEERING-CONSTRAINTS.md`'s "never an
+  error toast" rule is honored now rather than deferred along with the rest of the webview.
+- `AnalyzeOptions.changedFiles` is still not read by `analyze()`. `watcher.ts` passes it
+  through anyway on pure-content-edit triggers (empty array or populated, never on a
+  config/structural trigger) so its shape matches `FLOWS.md`'s diagram and needs no rewrite
+  the day core starts reading it — but core's own cache/invalidate.ts self-detects the real
+  classification via content hashing regardless, so this remains a no-op today, not a
+  half-wired optimization.
+
+**Real bugs/gaps found and fixed while building this** (each cost real debugging time, kept
+here so the next person touching this wiring doesn't rediscover them from scratch):
+1. **`analyze()` never actually called `onProgress`** despite `Progress`/`onProgress` existing
+   in `types.ts` since Task 5 — a real, previously-shipped gap, not something this task
+   introduced. Fixed with tests first (`core/test/analyze.progress.test.ts`): all four phases
+   fire in order for a full/cold/content-changed run; zero events fire for an unchanged cache
+   hit (matching "no re-analysis of any kind" — firing synthetic progress for work that didn't
+   happen would be dishonest telemetry).
+2. **`require()`-ing `@blocknet/core`'s ESM barrel from a CJS bundle throws
+   `ERR_REQUIRE_ASYNC_MODULE`** — `dependency-cruiser` has genuine top-level `await` in some
+   of its own source files. Confirmed directly (`node -e "require('./core/dist/index.js')"`).
+   Fixed by giving `path-utils.ts` (zero imports of its own) a dedicated
+   `@blocknet/core/path-utils` export, decoupled from `analyze.ts`'s dependency-cruiser graph
+   — `watcher.ts` imports `isExcludedPath` from there, not the main barrel. See
+   `core/src/index.ts`'s header comment and decisions/0011's 2026-07-20 amendment.
+3. **esbuild cannot lower dependency-cruiser's top-level `await` into a CJS *or* re-bundled
+   ESM output either** (a second, unrelated esbuild-specific resolution failure surfaced on
+   the ESM attempt — a deep import inside one of dependency-cruiser's optional integrations
+   that tsup's bundler already tolerates). Fixed by not re-bundling `ipc-worker.ts` at all:
+   `extension/esbuild.config.ts` copies `core/dist/ipc-worker.js` (already built by tsup)
+   verbatim into `extension/dist/ipc-worker.mjs`.
+4. **That copy silently broke a second time** because `core/tsup.config.ts`'s default
+   multi-entry behavior shares code across entries via an separate chunk file — copying
+   `ipc-worker.js` alone left it importing a sibling chunk that never made the trip
+   (`ERR_MODULE_NOT_FOUND` at `fork()` time, not build time). Fixed with `splitting: false`.
+5. **`AnalysisRunner` computing its worker path from its own `__dirname` only resolves
+   correctly once bundled into `extension/dist/`** — a unit test importing the TS source
+   directly (unbundled) gets `__dirname` = `src/`, not `dist/`, so `fork()` silently pointed
+   at a nonexistent file and every run "succeeded" into an `error` outcome. Fixed by making
+   `AnalysisRunner` take `workerPath` as a constructor parameter instead — `extension.ts` (the
+   only real caller, living in the same bundle) resolves it from its own `__dirname`; tests
+   pass the real built path directly. This is also just a better design independent of the
+   bug it fixed: `AnalysisRunner` is now fully unit-testable against the real forked worker.
+6. **Statically importing the real `vscode` module in a file loaded outside a real extension
+   host throws** (`Cannot find package 'vscode'` — there is no runtime shim, only
+   `@types/vscode`'s ambient types). Fixed by splitting the pure debounce/classification
+   logic into `change-buffer.ts` (no `vscode` import at all) from `watcher.ts`'s thin
+   `FileWatcher` shell — the same pattern already applied to `analysis-runner.ts` and
+   `cache-bridge.ts`, which turned out not to need `vscode` at all despite `LAYERS.md`
+   originally assuming the whole layer did (corrected there).
+7. VS Code auto-generates the `onCommand:blocknet.showArchitecture` activation event from
+   `contributes.commands` at the engines.vscode floor this extension targets — confirmed via
+   the editor's own manifest lint, not assumed. Declaring it explicitly was flagged as
+   redundant; removed from `package.json`, corrected in `ENGINEERING-CONSTRAINTS.md`.
+
+**Verification actually performed:** `sh .githooks/pre-push` green across both workspaces —
+core 267/267 tests, extension 19/19 tests, build/typecheck/lint clean. `AnalysisRunner`'s and
+`ipc-worker.ts`'s tests fork the real built worker (black-box, mirroring `cli.test.ts`'s own
+posture) — not mocked. **Not performed: a real F5 extension-development-host manual run.**
+This session's environment has no VS Code CLI/GUI available (`code --version` fails, no
+display) — Task 6's own acceptance criteria specifically call for "manual run on a real repo
+via F5 extension dev host," and that step is honestly outstanding, not silently skipped or
+falsely claimed. `.vscode/launch.json` + `.vscode/tasks.json` (a `build-extension` task,
+explicit rather than relying on VS Code's auto-detected npm-task naming) are in place for
+whoever runs it next: open the repo in VS Code, press F5, confirm the command shows up, a
+real repo's progress messages stream in, the placeholder body updates, and editing a file
+triggers a second push — Task 6's three literal acceptance criteria.
+
+256 core tests → **267/267** (11 new: 5 progress-wiring + 5 ipc-worker fork/IPC + 1 cli.test.ts
+assertion updated to match real progress output preceding the summary line, which is new,
+correct behavior, not a regression). Extension: **20/20** (10 `change-buffer.test.ts` + 8
+`analysis-runner.test.ts` + 2 `cache-bridge.test.ts` — 8, not 7, after the review's fix below
+added a regression test).
+
+**Two-pass adversarial review (2026-07-20): run, findings reconciled, fixes applied.**
+
+Doc-consistency pass found 3 minor issues, all fixed: (1) `types.ts`'s `changedFiles`
+docstring still called the read/don't-read question "open... for Task 6" after Task 6 had
+already shipped without resolving it — reworded to reflect that Task 6 shipped the
+watcher-populated-but-unread state and left the question open past Task 6, not within it; (2)
+`DIRECTORY-TREE.md` dropped the `**/` glob prefix on `workspaceContains:**/tsconfig.json` in
+one comment; (3) `.vscode/tasks.json` (the `build-extension` task `launch.json`'s
+`preLaunchTask` depends on) existed on disk and was named in this very entry but wasn't listed
+in `DIRECTORY-TREE.md`'s root `.vscode/` section. The pass also verified, by actually
+building/running rather than reading: core's type-only `WorkerMessage`/`WorkerRequest`
+re-export truly erases at build time (compiled `dist/index.js` has no runtime import of
+`ipc-worker.js`), and all seven claimed bug-fix numbers and both test-count claims were
+byte-accurate against a real `pre-push` run.
+
+Architectural-soundness pass found **one real bug**: `AnalysisRunner.run()`'s `onProgress`
+callback fired unconditionally for every progress message, gated only the *terminal*
+outcome against `isLatest()` — never the in-flight progress stream. Confirmed with a real
+repro (two overlapping forked runs against a real repo, no mocks): the older, superseded
+run's late `cache 4/4` progress event arrived *after* the newer run's `graph/macro` had
+already rendered "Analysis complete," silently overwriting the panel's status back to
+"Analyzing…" with nothing left to correct it — a direct violation of `FLOWS.md` §2a's own
+stated guarantee that "the webview never regresses to older data because an older analysis
+happened to finish last." **Fixed**: `AnalysisRunner.run()` now gates the `onProgress` call
+itself against `isLatest(generation)`, the same check the terminal outcome already used —
+centralizing the invariant in the one class that owns generation state, rather than trusting
+every future caller to remember to gate progress manually. Regression test added
+(`analysis-runner.test.ts`: "never delivers onProgress for a run superseded by a newer one
+before it started") — confirmed RED against the pre-fix code, GREEN after.
+
+The same pass also flagged one **defensible tradeoff** (checked and ruled out as a live bug,
+worth remembering if ever revisited): `fork(..., {stdio:'pipe'})` never consumes the child's
+stdout/stderr, a classic footgun if the child ever writes enough to itself to matter — stress-
+tested directly (a synthetic 20MB write under the same setup still delivered its IPC message
+in ~38ms; Node buffers non-blocking pipe I/O in-process rather than hanging the event loop),
+and `dependency-cruiser` (the only dependency with meaningful output volume inside `analyze()`)
+has zero `console.*` calls, so this isn't live today. A defensive `child.stdout?.resume()` /
+`.stderr?.resume()` would be cheap insurance if this class is ever extended to run something
+noisier. Also took the pass's two "very minor, not independently actionable" UX notes anyway
+since the fix was trivial and free: `commands/show-architecture.ts` now logs the full
+`analyze()` failure (including stack trace) to the console but only shows the toast's first
+line, and the outer `.catch()` path is now `isLatest()`-gated too, matching the `.then()` path
+for consistency (the reviewer confirmed this specific path isn't reachable in practice, but
+gating it costs nothing and removes an asymmetry a future reader would have to notice was
+deliberate).
+
+Concurrency/lifecycle correctness the pass explicitly verified by *running* real code, not
+just reading it (recorded here so it isn't re-litigated from scratch next time this wiring is
+touched): generation ordering holds correctly regardless of which of two overlapping runs
+finishes first (the generation counter increments synchronously, no `await` between
+assignment and use, so no interleaving window exists); a worker killed mid-flight
+(`SIGKILL` sent 5ms after fork) still resolves its promise immediately via the `'exit'`
+handler, never hangs; `change-buffer.ts`'s `Set`-based dedup and config/structural/content
+priority order was checked directly against `cache/invalidate.ts`'s own priority order and
+does not diverge in any way that affects `analyze()`'s actual behavior (which doesn't read
+`changedFiles` regardless); `watcher.ts`'s `toPosixRelative` (using `node:path`'s
+platform-dynamic `sep`) is actually slightly more correct cross-platform than two existing
+analogous helpers elsewhere in `core/` that hardcode a literal backslash split — noted as a
+pre-existing minor drift in `core/`, not a Task 6 regression, and not fixed here since it's
+out of this task's scope.
+
 ## Next up
 
-Task 5 (cache + incremental invalidation, decisions/0008) is next, blocked on nothing but
-itself. Checkpoint B (engine complete, `graph.json` schema frozen) follows once it's done.
+A real F5 manual verification (outstanding — see "Verification actually performed" above:
+this session's environment has no VS Code CLI/GUI). Then Task 7 (webview — React Flow macro
+graph, static fixture data first, parallelizable with earlier tasks per `TASKS-V1.md` but
+naturally sequenced after Task 6 in practice).
 
 ## Deferred by design (not gaps)
 
-- `extension/`, `.vscode/launch.json` — Checkpoint B gate ([LAYERS.md](../architecture/LAYERS.md)).
-- `core/src/ipc-worker.ts` — arrives with Task 5.
-- This directory is not yet a git repo (not requested; ready for one whenever asked).
+- `extension/webview/` (the real React Flow UI), `state.ts`, `git.ts`,
+  `commands/open-file.ts` — Tasks 7–9, not Task 6; see Task 6's entry above for exactly what
+  stands in for each in the meantime.
 
 ## Tracked risks
 
