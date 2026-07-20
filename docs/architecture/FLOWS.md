@@ -78,6 +78,15 @@ The config-change case (`tsconfig.json`, `package.json`) is not incremental —
 full-scan path (still debounced and generation-tagged the same way). Same function, same
 worker, different `AnalyzeOptions`.
 
+**Implementation note (Task 5, 2026-07-19):** `analyze()` does not actually read
+`changedFiles` — as built, `cache/invalidate.ts` re-derives the dirty set itself by diffing a
+freshly-hashed `CacheManifest` against the previous one (docs/decisions/0008), rather than
+trusting the caller's hint. The outcome this diagram describes (scoped re-extraction for a
+content edit, full rescan for a config change) is what Task 5 actually produces either way;
+`changedFiles` itself is currently unread and reserved for Task 6, which may or may not end
+up wiring it as a perf optimization (skip hashing the full tree) once the watcher's real
+behavior is known — an open question, not decided here.
+
 ## 3. Open-in-editor (⤢ affordance / risk evidence click)
 
 ```mermaid

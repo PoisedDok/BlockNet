@@ -6,8 +6,7 @@ is a pure renderer" ([PROTOCOL.md](./PROTOCOL.md)) enforceable rather than a sug
 | State | Owner | Lives in | Survives |
 |---|---|---|---|
 | Import truth (files, edges, risks) | `core` | Re-derived on every full `analyze()` call | Nothing — a full scan always trusts source over cache |
-| Content-hash manifest | `core/cache` | JSON file under `context.storageUri` | Disk, across VS Code restarts |
-| `GraphResult` snapshot (last known-good) | `core/cache` | JSON file under `context.storageUri`, alongside the manifest | Disk, across VS Code restarts — this is what makes a warm open instant |
+| Content-hash manifest, `GraphResult` snapshot (last known-good), and the pre-aggregation `FileEdge[]` the delta path merges into | `core/cache` | ONE JSON file under `context.storageUri` (`cache/store.ts`), not three separate files — see below | Disk, across VS Code restarts — this is what makes a warm open instant, and what the content-changed delta path merges into |
 | `GraphResult` (current, in-memory) | Extension host | In-memory in `extension.ts`, pushed to webview | One VS Code session (reloaded from the disk snapshot on restart, then delta-checked against the manifest) |
 | Node positions | Extension host | `context.workspaceState` | Disk, across VS Code restarts, per-workspace |
 | Camera (pan/zoom/selection) | Webview | `camera-store.ts`, in-memory | Nothing — resets on panel reload (positions do persist, see above) |
@@ -23,15 +22,23 @@ of those crossings goes through
 ## Multi-window safety
 
 `context.storageUri` is scoped to the *workspace*, not the *window* — if a developer opens
-the same repo in two VS Code windows, both extension hosts read and write the same manifest
-and snapshot files independently, with no cross-process lock. This is accepted, not
-overlooked, because both properties needed to make it safe already hold:
+the same repo in two VS Code windows, both extension hosts read and write the same cache
+file independently, with no cross-process lock. This is accepted, not overlooked, because
+all three properties needed to make it safe already hold:
 
-1. **No torn reads.** `cache/store.ts` never writes the manifest or snapshot in place — it
-   writes to a temp file in the same directory and `fs.rename`s it into place, which is
-   atomic on the same volume on both POSIX and NTFS. A reader always sees either the old
-   file or the fully-written new one, never a partial write.
-2. **Convergent, not conflicting, writes.** The manifest is a pure function of file
+1. **No torn reads.** `cache/store.ts` never writes in place — it writes a temp file in the
+   same directory and `fs.rename`s it into place, which is atomic on the same volume on both
+   POSIX and NTFS. A reader always sees either the old file or the fully-written new one,
+   never a partial write.
+2. **No torn *pairs* either — the manifest, snapshot, and FileEdge[] are one file, not
+   three.** Atomic-per-file isn't sufficient on its own: if the manifest and snapshot were
+   two separately-atomic files, a crash between the two writes could leave a newer manifest
+   on disk paired with a stale snapshot. `cache/invalidate.ts` would then diff the fresh
+   current state against that already-updated manifest, see no difference, and conclude
+   "unchanged" — silently serving the stale snapshot forever. Writing all three as a single
+   JSON blob makes that interleaving structurally impossible: a reader only ever observes
+   the fully-old state or the fully-new one, never a mix.
+3. **Convergent, not conflicting, writes.** The manifest is a pure function of file
    contents (content hashes), so two windows racing on the same edit converge to the same
    (or an equally valid, if one window is a commit ahead) result — there is no scenario
    where window A's and window B's writes disagree in a way that corrupts state, only one

@@ -36,14 +36,17 @@ export type AnalysisMeta = { analyzedAt: string; durationMs: number;
 export type AnalyzeOptions = { rootDir: string; cacheDir?: string;
                                 changedFiles?: string[];
                                 onProgress?: (p: Progress) => void };
-                         // changedFiles present → incremental path (cache/invalidate.ts);
-                         // absent → full scan
+                         // changedFiles is reserved for Task 6's watcher integration —
+                         // analyze() does not read it yet. Invalidation (Task 5) is entirely
+                         // manifest-diff-based: cache/invalidate.ts compares a fresh
+                         // CacheManifest against the previous one itself, rather than
+                         // trusting a caller-supplied changed-file hint.
 
 export type Progress  = { phase: 'blocks' | 'edges' | 'risks' | 'cache';
                            done: number; total: number };
 
 export type CacheManifest = { version: number; configHash: string;
-                               files: Record<string, { hash: string; blockId: string }> };
+                               files: Record<string, { hash: string }> };
 ```
 
 ## Field notes
@@ -52,5 +55,8 @@ export type CacheManifest = { version: number; configHash: string;
   inspector can consume it unchanged — designed forward on purpose, not speculative scope.
 - `AnalysisMeta.cacheHit` is what lets the webview distinguish "cold scan just finished" from
   "warm reload" without a separate message type.
-- `CacheManifest.configHash` is the single field `watcher.ts` checks to decide full-bust vs.
-  incremental — see [decisions/0008](../decisions/0008-caching-incremental-invalidation.md).
+- `CacheManifest.configHash` is the single field `cache/invalidate.ts` checks to decide
+  full-bust vs. incremental — see
+  [decisions/0008](../decisions/0008-caching-incremental-invalidation.md). `CacheManifest`
+  is an internal `core/cache` file format, not part of the frozen `graph.json` surface the
+  extension/webview consume.

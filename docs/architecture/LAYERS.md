@@ -53,9 +53,10 @@ flowchart TB
 |---|---|---|---|---|
 | 0 | npm deps | n/a | — | — |
 | 1 | `core/src/{blocks,edges,risks,cache}` | **No** — enforced by `core/test/no-vscode-import.test.ts` | `@blocknet/core` | Checkpoint B (`blocks/`, `edges/` truth validated earlier at Checkpoint A; `risks/`, `cache/` are built after A, in Tasks 4–5) |
-| 2 | `core/src/{analyze,cli,ipc-worker}.ts` | **No** | `@blocknet/core` | Checkpoint B (`ipc-worker.ts` ships with Task 5) |
-| 3 | `extension/src/{analysis-runner,cache-bridge,watcher}.ts` | Yes | `@blocknet/extension` | Checkpoint C |
-| 4 | `extension/src/{extension,panel,commands}.ts`, `state.ts`, `git.ts` | Yes | `@blocknet/extension` | Checkpoint C |
+| 2 | `core/src/{analyze,cli,ipc-worker}.ts` | **No** | `@blocknet/core` | `analyze.ts`/`cli.ts` at Checkpoint B; `ipc-worker.ts` ships with Task 6, alongside `analysis-runner.ts` (`docs/planning/PROGRESS.md`) |
+| 3 | `extension/src/{analysis-runner,cache-bridge,change-buffer}.ts` | **No** — deliberately kept vscode-free (unlike this table originally assumed) so the fork lifecycle, generation-id bookkeeping, and debounce-classification logic are unit-testable headlessly, same posture as Layers 1–2 | `@blocknet/extension` | Task 6 (`docs/planning/PROGRESS.md`) |
+| 3b | `extension/src/watcher.ts` | Yes — the thin `FileWatcher` shell wiring `vscode.workspace.createFileSystemWatcher` into `change-buffer.ts`; not unit-tested, verified manually via F5 | `@blocknet/extension` | Task 6 |
+| 4 | `extension/src/{extension,panel}.ts`, `commands/show-architecture.ts` | Yes | `@blocknet/extension` | Task 6 ships these three; `state.ts` (Task 8, workspaceState positions), `git.ts` and `commands/open-file.ts` (Task 9) land later — full layer clears at Checkpoint C |
 | 5 | `extension/webview/src/**` | **No** — only `acquireVsCodeApi()` | `@blocknet/extension` (own build) | Checkpoint C |
 
 ## The rule this enforces

@@ -3,8 +3,11 @@
 Binding for every task, every layer. These aren't preferences — a violation here is a bug,
 not a style nit.
 
-- **Activate lazily.** `onCommand:blocknet.showArchitecture` +
-  `workspaceContains:**/tsconfig.json`. Never `"*"`.
+- **Activate lazily.** `workspaceContains:**/tsconfig.json` (explicit in
+  `activationEvents`) plus `onCommand:blocknet.showArchitecture` (VS Code auto-generates this
+  one from `contributes.commands` as of the engines.vscode floor this extension targets —
+  confirmed via the editor's own manifest lint while building Task 6, not declared
+  redundantly). Never `"*"`.
 - **Never block the extension host thread.** All analysis happens in a forked child
   process — see [PROCESS-BOUNDARY.md](./PROCESS-BOUNDARY.md). Typing must stay smooth
   during a cold scan.

@@ -18,7 +18,12 @@ BlockNet/
 ├── CHANGELOG.md                      # Keep-a-Changelog format, one entry per release
 ├── CONTRIBUTING.md                   # F5 dev host instructions, test workflow, PR expectations
 ├── .vscode/
-│   ├── launch.json                   # F5 = Extension Development Host, pointed at a real repo
+│   ├── launch.json                   # F5 = Extension Development Host; preLaunchTask →
+│   │                                 #   the build-extension task below (Task 6)
+│   ├── tasks.json                    # build-extension: npm run build in extension/ — an
+│   │                                 #   explicit task, not VS Code's auto-detected npm-task
+│   │                                 #   naming, so launch.json's preLaunchTask can't drift
+│   │                                 #   from a label VS Code generates (Task 6)
 │   └── extensions.json
 ├── .github/
 │   ├── workflows/ci.yml              # npm ci && build && typecheck && test (all --workspaces) && lint
@@ -32,10 +37,15 @@ BlockNet/
 ├── core/                             # @blocknet/core — pure TS. Zero vscode imports.
 │   ├── package.json
 │   ├── tsconfig.json
-│   ├── tsup.config.ts                # bundles three entrypoints: index, cli, ipc-worker
+│   ├── tsup.config.ts                # bundles four entrypoints: index, cli, ipc-worker,
+│   │                                 #   path-utils — splitting:false (each self-contained,
+│   │                                 #   no shared chunk files) so extension/'s build can
+│   │                                 #   copy ipc-worker.js out of dist/ in isolation
 │   ├── src/
 │   │   ├── index.ts                  # public API barrel: analyze() + all types. The ONLY file
-│   │   │                             #   an external consumer (or the future v2 webapp) imports.
+│   │   │                             #   an external consumer (or the future v2 webapp)
+│   │   │                             #   imports — except path-utils.ts, which has its own
+│   │   │                             #   dedicated export (see its own entry below)
 │   │   ├── types.ts                  # see DATA-MODEL.md
 │   │   ├── analyze.ts                # orchestrator: detect() → runEdges() → runRisks() →
 │   │   │                             #   cache.write() → GraphResult
@@ -59,6 +69,13 @@ BlockNet/
 │   │   │                             #   edges/depcruise-runner.ts (hands it to
 │   │   │                             #   dependency-cruiser directly) and file-walk.ts (derives
 │   │   │                             #   its own predicate from it) share this one definition.
+│   │   │                             #   Zero imports of its own — why it gets its own
+│   │   │                             #   package.json "exports" entry (./path-utils, Task 6)
+│   │   │                             #   instead of being re-exported from index.ts: staying
+│   │   │                             #   importable without pulling in analyze.ts's
+│   │   │                             #   dependency-cruiser graph, which extension/src/
+│   │   │                             #   watcher.ts (bundled into a CJS target) can't
+│   │   │                             #   tolerate — see decisions/0011's 2026-07-20 amendment.
 │   │   ├── realpath-dedup.ts         # symlink-cycle safety for any recursive directory walk —
 │   │   │                             #   caps cost at the number of distinct real directories
 │   │   │                             #   regardless of alias/cycle count. Used by
@@ -142,6 +159,10 @@ BlockNet/
 │   │   │   │                         #   block-level Edge to attach to (block-aggregate.ts
 │   │   │   │                         #   already drops intra-block edges), so it's real but
 │   │   │   │                         #   out of v1's block-level scope, not fabricated.
+│   │   │   │                         #   Deliberately does NOT exclude "(root)" as CIRCULAR
+│   │   │   │                         #   excludes it from BOUNDARY (SCC membership is a raw
+│   │   │   │                         #   graph fact, not a claim about a designed public
+│   │   │   │                         #   surface) — see decisions/0006's amendment.
 │   │   │   ├── cycles.ts             # hand-rolled, ITERATIVE (not recursive) Tarjan SCC —
 │   │   │   │                         #   a recursive DFS's stack depth tracks the longest
 │   │   │   │                         #   import chain, not file count, and real repos build
@@ -153,7 +174,9 @@ BlockNet/
 │   │   │   └── boundary.ts           # deep-import-vs-declared-entry rule; "declared entry"
 │   │   │                             #   = the target block's full package.json `exports`
 │   │   │                             #   map (all subpaths, nested condition objects
-│   │   │                             #   flattened) when present, else `main`, else the
+│   │   │                             #   flattened, wildcard leaves like "./*" compiled to
+│   │   │                             #   a RegExp and matched directly — not resolved via
+│   │   │                             #   the filesystem) when present, else `main`, else the
 │   │   │                             #   block's own conventional index file (checked at
 │   │   │                             #   BOTH `<block>/index.*` and `<block>/src/index.*`)
 │   │   │                             #   — see decisions/0006's amendment for the exact
@@ -164,11 +187,42 @@ BlockNet/
 │   │   │                             #   (100% of aetherinc's crossing edges flagged before
 │   │   │                             #   the fix, see decisions/0006's amendment)
 │   │   │
-│   │   ├── cache/                    # LAYER 1 — incrementality
-│   │   │   ├── manifest.ts           # CacheManifest read/write; per-file hash + blockId
-│   │   │   ├── invalidate.ts         # given changed files, computes the dirty scope
-│   │   │   └── store.ts              # persists BOTH the CacheManifest and the last
-│   │   │                             #   GraphResult snapshot to an injected cache dir
+│   │   ├── cache/                    # LAYER 1 — incrementality. Added with Task 5,
+│   │   │   │                         #   2026-07-19 (decisions/0008).
+│   │   │   ├── manifest.ts           # builds a CacheManifest from the current file list:
+│   │   │   │                         #   per-file content hash, plus one configHash
+│   │   │   │                         #   covering every package.json/
+│   │   │   │                         #   tsconfig.json in the tree. A file outside
+│   │   │   │                         #   TS/JS's resolvable extensions never has its
+│   │   │   │                         #   content read at all (a constant placeholder hash
+│   │   │   │                         #   is used instead) — it can never be a
+│   │   │   │                         #   dependency-cruiser module, so its bytes can never
+│   │   │   │                         #   affect a FileEdge; only its existence matters,
+│   │   │   │                         #   already tracked via the manifest's key set. A real
+│   │   │   │                         #   Aether repo's 504MB checked-in Docker archive
+│   │   │   │                         #   proved this isn't a hypothetical: reading it (and
+│   │   │   │                         #   two 69MB PDFs) turned a claimed instant cache hit
+│   │   │   │                         #   into a 10-second read before this existed.
+│   │   │   ├── invalidate.ts         # diffs a previous CacheManifest against the current
+│   │   │   │                         #   one into an InvalidationPlan — cold / config-
+│   │   │   │                         #   changed / structural-changed (file added or
+│   │   │   │                         #   removed — always a full bust, see the module's
+│   │   │   │                         #   header comment for why scoping add/delete would
+│   │   │   │                         #   need an unresolved-import reverse-index this
+│   │   │   │                         #   engine doesn't build) / unchanged / content-
+│   │   │   │                         #   changed (the only scoped case — lists exactly the
+│   │   │   │                         #   files whose hash changed).
+│   │   │   └── store.ts              # persists the manifest, the last GraphResult
+│   │   │                             #   snapshot, AND the pre-aggregation FileEdge[] the
+│   │   │                             #   delta path merges into — together, in ONE JSON
+│   │   │                             #   file (write-temp-then-rename), not three
+│   │   │                             #   independently-atomic ones: a crash between two
+│   │   │                             #   separate atomic writes could leave a newer
+│   │   │                             #   manifest paired with a stale snapshot on disk,
+│   │   │                             #   which invalidate.ts would then read as
+│   │   │                             #   "unchanged" and serve stale results forever. One
+│   │   │                             #   file makes that interleaving impossible — see
+│   │   │                             #   STATE-OWNERSHIP.md.
 │   │   │
 │   │   ├── cli.ts                    # LAYER 2 — `blocknet analyze <path> [--json] [--cache-dir]`
 │   │   │                             #   human/CI entrypoint: stdout progress + final JSON
@@ -211,7 +265,16 @@ BlockNet/
 │       ├── analyze.risks.test.ts     # end-to-end risks on the real monorepo fixture +
 │       │                             #   riskCount tallying, mirroring analyze.edges.test.ts's
 │       │                             #   pattern for Task 3. Added with Task 4.
-│       ├── cache.test.ts
+│       ├── cache.manifest.test.ts    # per-file/configHash hashing, incl. the non-source-
+│       │                             #   file content-skip. Added with Task 5.
+│       ├── cache.store.test.ts       # round-trip, atomicity, corrupt/missing degrade.
+│       │                             #   Added with Task 5.
+│       ├── cache.invalidate.test.ts  # all five InvalidationPlan kinds + priority order.
+│       │                             #   Added with Task 5.
+│       ├── analyze.cache.test.ts     # end-to-end: cold/unchanged/content-changed/config-
+│       │                             #   changed/structural-changed on a mutated temp repo,
+│       │                             #   mirroring analyze.edges.test.ts's/
+│       │                             #   analyze.risks.test.ts's pattern. Added with Task 5.
 │       └── cli.test.ts
 │
 ├── extension/                        # @blocknet/extension. package.json IS the VS Code
@@ -220,31 +283,49 @@ BlockNet/
 │   │                                 #   contributes.commands, main → dist/extension.js
 │   ├── tsconfig.json
 │   ├── esbuild.config.ts             # bundles the HOST only (src/) — separate from webview
+│   │                                 #   build. Also copies @blocknet/core's own
+│   │                                 #   dist/ipc-worker.js verbatim into dist/ipc-worker.mjs
+│   │                                 #   rather than re-bundling it — see PROCESS-BOUNDARY.md
 │   ├── .vscodeignore                 # excludes src/**, webview/src/**, test/** — see REPO-STANDARDS.md
 │   ├── media/icon.png                # 128×128 Marketplace icon
 │   │
-│   ├── src/                          # LAYERS 3-4 — everything with a vscode import
+│   ├── src/                          # LAYERS 3-4 — everything with a vscode import, except
+│   │   │                             #   analysis-runner.ts/cache-bridge.ts/change-buffer.ts,
+│   │   │                             #   deliberately kept vscode-free — see LAYERS.md
 │   │   ├── extension.ts              # activate()/deactivate(); lazy activation
-│   │   │                             #   (onCommand + workspaceContains:tsconfig.json);
-│   │   │                             #   if workspaceFolders.length > 1, shows the
-│   │   │                             #   multi-root EmptyState instead of analyzing —
-│   │   │                             #   see ENGINEERING-CONSTRAINTS.md
+│   │   │                             #   (workspaceContains:**/tsconfig.json explicit;
+│   │   │                             #   onCommand auto-generated from contributes.commands
+│   │   │                             #   — see ENGINEERING-CONSTRAINTS.md). Resolves
+│   │   │                             #   dist/ipc-worker.mjs's path from its own __dirname
+│   │   │                             #   and constructs AnalysisRunner with it.
 │   │   ├── analysis-runner.ts        # owns the forked child process lifecycle; tracks a
 │   │   │                             #   monotonic generation id per run, discards results
-│   │   │                             #   from a superseded generation — see FLOWS.md §2a
+│   │   │                             #   from a superseded generation — see FLOWS.md §2a.
+│   │   │                             #   Takes workerPath as a constructor param (Task 6) —
+│   │   │                             #   see decisions/0011's 2026-07-20 amendment for why.
 │   │   ├── cache-bridge.ts           # resolves context.storageUri → cache dir for ipc-worker
-│   │   ├── watcher.ts                # createFileSystemWatcher; buffers + debounces
-│   │   │                             #   (~500ms) before classifying and triggering
-│   │   │                             #   (content / add-delete-rename / config) — see
-│   │   │                             #   decisions/0008, FLOWS.md §2a
-│   │   ├── panel.ts                  # WebviewPanel lifecycle: CSP, fonts, html shell,
-│   │   │                             #   disposal. One panel, singleton.
+│   │   ├── change-buffer.ts          # pure debounce-buffer bookkeeping: classifies events
+│   │   │                             #   (content / add-delete-rename / config) per
+│   │   │                             #   decisions/0008's priority order — see FLOWS.md §2a.
+│   │   │                             #   No vscode import; watcher.ts's FileWatcher is the
+│   │   │                             #   thin vscode-API shell wired on top of this.
+│   │   ├── watcher.ts                # createFileSystemWatcher, debounces (~500ms), feeds
+│   │   │                             #   change-buffer.ts, fires onTrigger with the flush
+│   │   ├── panel.ts                  # WebviewPanel lifecycle: CSP, html shell, disposal.
+│   │   │                             #   One panel, singleton. Task 6 ships a placeholder
+│   │   │                             #   body (progress text + raw JSON) — the real React
+│   │   │                             #   Flow macro graph is Task 7's; the no-workspace/
+│   │   │                             #   multi-root bodies are also a Task-6-only stand-in
+│   │   │                             #   for the real EmptyState.tsx (Tasks 7-8).
 │   │   ├── state.ts                  # workspaceState: node positions + last-good manifest ptr
+│   │   │                             #   — Task 8, not yet built
 │   │   ├── git.ts                    # dirty-file lookup via the built-in git extension's API
+│   │   │                             #   — Task 9, not yet built
 │   │   │
 │   │   ├── commands/
 │   │   │   ├── show-architecture.ts  # `blocknet.showArchitecture` — creates/reveals the panel
 │   │   │   └── open-file.ts          # showTextDocument + vscode.diff — see decisions/0009
+│   │   │                             #   — Task 9, not yet built
 │   │   │
 │   │   └── shared/
 │   │       └── protocol.ts           # see PROTOCOL.md — imported by both src/ and webview/src/
