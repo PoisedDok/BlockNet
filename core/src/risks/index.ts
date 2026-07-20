@@ -17,6 +17,19 @@
 // are a hard graph fact with ~zero false positives by construction (docs/decisions/0006),
 // while boundary's precision depends on the declared-entry definition, making it the
 // comparatively softer signal when both are true for the same pair.
+//
+// CIRCULAR deliberately does NOT exclude the "(root)" synthetic catch-all the way
+// boundary.ts excludes it as a BOUNDARY target — this is an intentional asymmetry, not an
+// oversight (flagged and specifically checked during Task 4's adversarial review). BOUNDARY
+// is about a DESIGNED public surface, which root categorically has none of (it's an
+// unclassified bucket, not an architectural unit) — excluding it there prevents pure noise.
+// CIRCULAR is about a raw graph fact: SCC membership doesn't care whether a file happens to
+// be unclassified, and hiding a real cycle just because one of its files landed in "(root)"
+// would misrepresent the truth this engine exists to report (docs/PRINCIPLES.md). It's also
+// never a dangling reference: any file whose edge resolves to ROOT_BLOCK_ID is, by
+// construction, a real file `analyze.ts`'s `walkRealFiles` pass will also find, which is
+// exactly what flips `hasRootFiles` true and appends the "(root)" BlockNode/Edge this risk
+// attaches to — see analyze.risks.test.ts's root-touching-cycle case for the proof.
 import { resolveBlock } from '../edges/resolve-block.js';
 import type { BlockNode, Edge, Evidence, FileEdge, Risk } from '../types.js';
 import { findBoundaryViolations } from './boundary.js';

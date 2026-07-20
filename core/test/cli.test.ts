@@ -54,12 +54,13 @@ describe('blocknet analyze CLI', () => {
     expect(typeof result.meta.durationMs).toBe('number');
   });
 
-  it('prints a human-readable summary without --json', () => {
+  it('prints progress lines followed by a human-readable summary without --json', () => {
     const emptyRepo = createTempRepo();
     const { stdout } = runCli(['analyze', emptyRepo]);
 
     expect(() => JSON.parse(stdout)).toThrow();
-    expect(stdout).toMatch(/^Analyzed \d+ file\(s\)/);
+    expect(stdout).toMatch(/^\[blocks] \d+\/4\n\[edges] \d+\/4\n\[risks] \d+\/4\n\[cache] \d+\/4\n/);
+    expect(stdout).toMatch(/Analyzed \d+ file\(s\)/);
   });
 
   it('errors on a missing path instead of silently accepting a flag as the path', () => {

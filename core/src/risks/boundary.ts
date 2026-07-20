@@ -20,6 +20,17 @@
 // resolver, not a second bundler — dependency-cruiser already did the hard resolution work
 // for FileEdge.targetFile; this only needs to answer "does this package.json-declared path
 // point at the same real file," which is a much narrower question.
+//
+// An `exports` leaf containing `*` (e.g. `"./*": "./src/*.ts"`) is Node's wildcard-subpath
+// form — a mainstream pattern for intentionally exposing an entire subtree at once, not an
+// exotic case (confirmed as a real false-positive during Task 4's adversarial review: without
+// this, a package using this exact shape had every deep import through it flagged BOUNDARY,
+// the false-positive-on-sight failure docs/PRINCIPLES.md treats as fatal). `*` is handled as
+// a pattern matched directly against the already-resolved FileEdge.targetFile, not resolved
+// via existsSync — Node's own semantics let `*` match one-or-more path segments (including
+// further slashes), so there's no single real file to search for; the wildcard leaf itself
+// already fully determines which real files qualify, without needing filesystem existence
+// checks or the built-output extension-swap fallback literal leaves need.
 import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import { hasPackageJson, readPackageJson, toBlockRelativePath } from '../blocks/fs-utils.js';
@@ -28,7 +39,14 @@ import type { BlockNode, FileEdge } from '../types.js';
 
 type PackageJsonEntries = { main?: unknown; exports?: unknown };
 
-const RESOLVABLE_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+// Every extension dependency-cruiser actually parses as TS/JS-compatible with
+// tsPreCompilationDeps: true (edges/depcruise-runner.ts always passes this option) —
+// verified directly against dependency-cruiser's own TS_COMPATIBLE_EXTENSIONS list. `.mts`/
+// `.cts` (Node's native ESM/CJS TypeScript extensions — a real vite.config.mts is mainstream,
+// not exotic) were missing here originally; mirrored in cache/manifest.ts's
+// SOURCE_EXTENSIONS, which had the identical gap (see docs/planning/PROGRESS.md's Task 5
+// entry for the real stale-cache bug that gap caused).
+const RESOLVABLE_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts'];
 
 function isFile(path: string): boolean {
   try {
@@ -44,7 +62,7 @@ function isFile(path: string): boolean {
  * none of those exist — a declared entry pointing at nothing real can't be a valid boundary. */
 function resolveDeclaredPath(baseDir: string, declaredPath: string): string | undefined {
   const cleaned = declaredPath.replace(/^\.\//, '');
-  const withoutKnownExt = cleaned.replace(/\.(ts|tsx|js|jsx|mjs|cjs)$/, '');
+  const withoutKnownExt = cleaned.replace(/\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/, '');
 
   for (const ext of RESOLVABLE_EXTENSIONS) {
     const candidate = join(baseDir, withoutKnownExt + ext);
@@ -57,6 +75,20 @@ function resolveDeclaredPath(baseDir: string, declaredPath: string): string | un
   return undefined;
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Converts a package.json-declared path relative to `block`, containing exactly one `*`, into
+ * a RegExp matching the POSIX path (relative to rootDir) it stands for. `*` maps to one-or-more
+ * characters (Node's own exports-wildcard semantics), which may itself include further `/`s. */
+function wildcardToPattern(blockPath: string, declaredPath: string): RegExp {
+  const cleaned = declaredPath.replace(/^\.\//, '');
+  const fullRelPath = `${blockPath}/${cleaned}`;
+  const escaped = fullRelPath.split('*').map(escapeRegExp).join('.+');
+  return new RegExp(`^${escaped}$`);
+}
+
 /** Recursively collects every string leaf in a package.json `exports` value — a single
  * string, an array, a flat subpath map ("./utils": "./src/utils.ts"), or nested condition
  * objects ({"import": ..., "require": ..., "types": ...}) at any depth. */
@@ -67,11 +99,19 @@ function collectExportLeaves(value: unknown): string[] {
   return [];
 }
 
+type DeclaredEntries = { files: Set<string>; patterns: RegExp[] };
+
+function isDeclaredEntry(entries: DeclaredEntries, targetFile: string): boolean {
+  return entries.files.has(targetFile) || entries.patterns.some((p) => p.test(targetFile));
+}
+
 /**
- * The set of file paths (POSIX, relative to rootDir) that count as `block`'s declared public
- * surface — the target-file comparison set for boundary checking.
+ * `block`'s declared public surface — the target-file comparison set for boundary checking.
+ * `files` are exact matches; `patterns` come from wildcard `exports` leaves and are matched
+ * directly against a FileEdge's already-resolved targetFile (see header comment for why
+ * wildcards skip the filesystem-resolution path literal leaves go through).
  */
-function declaredEntryFiles(rootDir: string, block: BlockNode): Set<string> {
+function declaredEntryFiles(rootDir: string, block: BlockNode): DeclaredEntries {
   const baseDir = join(rootDir, block.path);
   const { pkg } = readPackageJson(baseDir);
   const typed = pkg as PackageJsonEntries | undefined;
@@ -88,14 +128,19 @@ function declaredEntryFiles(rootDir: string, block: BlockNode): Set<string> {
     candidates = ['index', 'src/index'];
   }
 
-  const entries = new Set<string>();
+  const files = new Set<string>();
+  const patterns: RegExp[] = [];
   for (const candidate of candidates) {
+    if (candidate.includes('*')) {
+      patterns.push(wildcardToPattern(block.path, candidate));
+      continue;
+    }
     const resolved = resolveDeclaredPath(baseDir, candidate);
     if (!resolved) continue;
     const relPath = toBlockRelativePath(rootDir, resolved);
-    if (relPath) entries.add(relPath);
+    if (relPath) files.add(relPath);
   }
-  return entries;
+  return { files, patterns };
 }
 
 /**
@@ -121,7 +166,7 @@ function declaredEntryFiles(rootDir: string, block: BlockNode): Set<string> {
  */
 export function findBoundaryViolations(fileEdges: FileEdge[], blocks: BlockNode[], rootDir: string): FileEdge[] {
   const blocksById = new Map(blocks.map((b) => [b.id, b]));
-  const entryCache = new Map<string, Set<string>>();
+  const entryCache = new Map<string, DeclaredEntries>();
 
   const violations: FileEdge[] = [];
   for (const edge of fileEdges) {
@@ -140,7 +185,7 @@ export function findBoundaryViolations(fileEdges: FileEdge[], blocks: BlockNode[
       entryCache.set(targetBlockId, entries);
     }
 
-    if (!entries.has(edge.targetFile)) violations.push(edge);
+    if (!isDeclaredEntry(entries, edge.targetFile)) violations.push(edge);
   }
   return violations;
 }
