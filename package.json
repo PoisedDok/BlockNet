@@ -13,7 +13,8 @@
     "node": ">=22"
   },
   "workspaces": [
-    "core"
+    "core",
+    "extension"
   ],
   "scripts": {
     "prepare": "git config core.hooksPath .githooks",

@@ -59,7 +59,16 @@ export type AnalysisMeta = {
 export type AnalyzeOptions = {
   rootDir: string;
   cacheDir?: string;
-  // Present → incremental path (cache/invalidate.ts). Absent → full scan.
+  // Populated by extension/src/watcher.ts (Task 6, docs/architecture/FLOWS.md's incremental-
+  // re-analyze flow) on pure-content-edit triggers — but still NOT read by analyze(). cache/
+  // invalidate.ts (Task 5) determines what's dirty itself, by diffing a full CacheManifest
+  // built from every file in the tree, rather than trusting a caller-supplied hint — a
+  // deliberate choice (docs/decisions/0008: "the manifest ... used to decide what, if
+  // anything, is now stale"), not an oversight. Whether a future caller-supplied
+  // changedFiles list should ever let analyze() skip hashing the full tree remains an open,
+  // unresolved optimization question — Task 6 shipped without deciding it (see
+  // docs/planning/PROGRESS.md's Task 6 entry) — not something to guess at without real
+  // watcher behavior at scale to validate against.
   changedFiles?: string[];
   onProgress?: (p: Progress) => void;
 };
@@ -73,5 +82,5 @@ export type Progress = {
 export type CacheManifest = {
   version: number;
   configHash: string;
-  files: Record<string, { hash: string; blockId: string }>;
+  files: Record<string, { hash: string }>;
 };

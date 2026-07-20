@@ -14,6 +14,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./path-utils": {
+      "types": "./dist/path-utils.d.ts",
+      "import": "./dist/path-utils.js"
     }
   },
   "bin": {
