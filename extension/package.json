@@ -1,0 +1,46 @@
+{
+  "name": "blocknet",
+  "displayName": "BlockNet",
+  "description": "Render a TS/JS repo's block-level architecture graph, with import cycles and boundary violations flagged, inside a VS Code webview.",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PoisedDok/BlockNet.git"
+  },
+  "engines": {
+    "node": ">=22",
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Visualization", "Other"],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/tsconfig.json"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "blocknet.showArchitecture",
+        "title": "BlockNet: Show Architecture"
+      }
+    ]
+  },
+  "scripts": {
+    "prebuild": "npm run build --prefix ../core",
+    "build": "tsx esbuild.config.ts",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.28.1",
+    "tsx": "^4.20.6",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@blocknet/core": "*"
+  }
+}

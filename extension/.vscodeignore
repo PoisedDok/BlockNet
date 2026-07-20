@@ -1,0 +1,8 @@
+src/**
+webview/src/**
+test/**
+esbuild.config.ts
+tsconfig.json
+vitest.config.ts
+*.map
+.gitignore
