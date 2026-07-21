@@ -1,5 +1,8 @@
 import dagre from 'dagre';
 import type { BlockNode, Edge } from '@blocknet/core';
+import type { Position } from '../../../src/shared/protocol.js';
+
+export type { Position };
 
 // Card footprint used purely for layout spacing — kept in sync by eye with BlockNode.tsx's
 // actual rendered size (236px wide per the design tokens; height is an estimate since real
@@ -7,13 +10,14 @@ import type { BlockNode, Edge } from '@blocknet/core';
 const NODE_WIDTH = 236;
 const NODE_HEIGHT = 120;
 
-export type Position = { x: number; y: number };
-
 /** Auto-layout for the macro graph (docs/decisions/0007): left-to-right rank flow so an
  * edge's target lands to the right of its source, matching the output(right)→input(left)
- * port convention. Runs on every hydration for now — Task 8 makes this apply only to
- * BlockNode ids absent from a persisted positions map (docs/architecture/DIRECTORY-TREE.md);
- * with no persistence yet, every node is "new" every time. */
+ * port convention. Always computes every node's position — dagre has no notion of a "pinned"
+ * node to skip, so scoping it to only unpositioned ids isn't how this works. Task 8 instead
+ * layers camera-store.ts's persisted/dragged positions over this output at the BlockCanvas
+ * level (dragOverrides[id] ?? layoutBlocks(...)[id]) — the same pattern already proven for
+ * live drag overrides, extended to persisted ones too, rather than teaching dagre a pinning
+ * concept it doesn't have. */
 export function layoutBlocks(nodes: BlockNode[], edges: Edge[]): Record<string, Position> {
   const g = new dagre.graphlib.Graph();
   g.setGraph({ rankdir: 'LR', nodesep: 60, ranksep: 140 });

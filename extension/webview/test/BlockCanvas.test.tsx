@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { BlockNode, Edge, Risk } from '@blocknet/core';
+import type { Edge, Risk } from '@blocknet/core';
+import type { WebviewBlockNode } from '../../src/shared/protocol.js';
 import { BlockCanvas } from '../src/flow/BlockCanvas.js';
 
-function block(id: string, riskCount = 0): BlockNode {
-  return { id, name: id, path: `packages/${id}`, pills: ['typescript'], fileCount: 3, riskCount };
+function block(id: string, riskCount = 0, dirty = false): WebviewBlockNode {
+  return { id, name: id, path: `packages/${id}`, pills: ['typescript'], fileCount: 3, riskCount, dirty };
 }
 
 function risk(): Risk {
@@ -98,6 +99,38 @@ describe('BlockCanvas', () => {
     fireEvent.keyDown(nodeEl, { key: 'ArrowRight' });
 
     expect(nodeEl.style.transform).not.toBe(before);
+  });
+
+  it('keeps a dragged node at its moved position across a live graph/macro-style prop update', () => {
+    // Regression test for the applyNodeChanges rewrite: flowNodes re-syncs from baseFlowNodes
+    // (dagre + graph data) via a useEffect whenever `nodes`/`edges` change identity — e.g. a
+    // real incremental re-analysis pushing a fresh graph/macro while a user has already
+    // dragged a node this session. That re-sync must preserve the moved position (from the
+    // previous render's flowNodes state), not silently snap back to dagre's fresh layout —
+    // dagre has no idea the user moved anything.
+    const nodes = [block('gateway'), block('auth')];
+    const { rerender } = render(<BlockCanvas nodes={nodes} edges={[]} />);
+    const nodeEl = () => screen.getByText('gateway').closest('.react-flow__node') as HTMLElement;
+    const before = nodeEl().style.transform;
+
+    fireEvent.click(nodeEl());
+    fireEvent.keyDown(nodeEl(), { key: 'ArrowRight' });
+    const afterMove = nodeEl().style.transform;
+    expect(afterMove).not.toBe(before);
+
+    // A new nodes/edges array (same ids, same shape) simulates a live graph/macro update —
+    // BlockCanvas has no way to distinguish this from a genuinely fresh analysis result.
+    rerender(<BlockCanvas nodes={[block('gateway'), block('auth')]} edges={[]} />);
+    expect(nodeEl().style.transform).toBe(afterMove);
+  });
+
+  it('shows the dirty marker only on blocks flagged dirty', () => {
+    const nodes = [block('gateway', 0, true), block('auth', 0, false)];
+    render(<BlockCanvas nodes={nodes} edges={[]} />);
+    const gatewayCard = screen.getByText('gateway').closest('.bn-card') as HTMLElement;
+    const authCard = screen.getByText('auth').closest('.bn-card') as HTMLElement;
+    expect(gatewayCard.querySelector('.bn-card-dirty')).not.toBeNull();
+    expect(authCard.querySelector('.bn-card-dirty')).toBeNull();
   });
 
   it('renders 30 blocks and 100 edges without throwing (stress fixture size)', () => {
