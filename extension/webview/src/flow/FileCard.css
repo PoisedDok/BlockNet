@@ -1,0 +1,145 @@
+.bn-file-card {
+  width: 220px;
+  padding: 12px 14px;
+  background: linear-gradient(180deg, var(--bn-card-bg-top), var(--bn-card-bg-bottom));
+  border: 1px solid var(--bn-border);
+  border-radius: var(--bn-radius-card);
+  box-shadow: var(--bn-shadow-card);
+  cursor: pointer;
+  transition:
+    opacity 0.28s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.bn-file-card[data-risk] {
+  border-color: var(--bn-risk-border);
+}
+
+.bn-file-card[data-selected] {
+  border-color: var(--bn-border-selected);
+  box-shadow: var(--bn-shadow-card-selected);
+}
+
+.bn-file-card:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, var(--bn-border-selected));
+  outline-offset: 2px;
+}
+
+.bn-file-card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bn-file-card-dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 2.5px;
+  background: var(--bn-text-primary);
+}
+
+.bn-file-card[data-risk] .bn-file-card-dot {
+  background: var(--bn-risk);
+  box-shadow: 0 0 8px var(--bn-risk-glow);
+}
+
+.bn-file-card-name {
+  font: 600 13px var(--bn-font-mono);
+  color: var(--bn-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* A flex item's default min-width is "auto", which for an element with overflow other than
+   * "visible" resolves to 0 — without this, a long file name sharing the row with the ⤢
+   * button, LOC badge, and (when present) the dirty/risk pills can shrink all the way to zero
+   * width and render as fully invisible text, not merely truncated. Confirmed as a real,
+   * reproducible bug (not theoretical) via live Playwright verification against the real dev
+   * server: "guard.ts"/"auth-client.ts" (the risk-pill-bearing cards, which have the least
+   * remaining row space) rendered with a computed width of 0px while "index.ts"/"routes.ts"
+   * (no risk pill, more free space) rendered fine — same markup, same CSS, only the sibling
+   * element mix differed. */
+  min-width: 44px;
+}
+
+.bn-file-card-spacer {
+  flex: 1;
+}
+
+.bn-file-card-open {
+  flex: none;
+  width: 22px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: 1px solid var(--bn-border);
+  background: var(--bn-pill-bg);
+  color: var(--bn-text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.bn-file-card-open:hover {
+  color: var(--bn-text-primary);
+  border-color: var(--bn-border-selected);
+}
+
+.bn-file-card-open:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, var(--bn-border-selected));
+  outline-offset: 1px;
+}
+
+.bn-file-card-badges {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* wrap, not a fixed magic-number card width: a real file's badge combination (LOC + dirty +
+   * risk, all present at once) is exactly the case that overlapped before this row was split
+   * out from the name row — see FileCard.tsx's own comment. Wrapping is the fix that stays
+   * correct for a real repo's actual file names/states, not just today's fixture data. */
+  flex-wrap: wrap;
+}
+
+.bn-file-card-loc {
+  flex: none;
+  font: 9.5px var(--bn-font-mono);
+  color: var(--bn-text-faint);
+  background: var(--bn-pill-bg);
+  border: 1px solid var(--bn-border);
+  padding: 2px 6px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+
+.bn-file-card-dirty {
+  flex: none;
+  font: 9.5px var(--bn-font-mono);
+  color: var(--bn-dirty);
+  white-space: nowrap;
+}
+
+.bn-file-card-risk-pill {
+  flex: none;
+  font: 600 10px var(--bn-font-mono);
+  color: var(--bn-risk-strong);
+  background: var(--bn-risk-soft);
+  border: 1px solid var(--bn-risk-border);
+  padding: 2px 6px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+
+.bn-file-card-path {
+  margin-top: 6px;
+  font: 10px var(--bn-font-mono);
+  color: var(--bn-text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
