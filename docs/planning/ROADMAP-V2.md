@@ -118,21 +118,57 @@ carries — designed forward on purpose. Host resolves edge → endpoint ranges 
 editor. Diff tokens if we render our own read-only diff: add `#86c79a` on
 `rgba(96,168,120,.12)`, del `#f0888a` on `rgba(239,68,68,.11)`.
 
-## v2.2 — AI context chips + chat participant (the retention hook)
+## v2.2 — Agent-agnostic context & query layer (rewritten 2026-07-21, was "AI context chips + chat participant")
 
-**What:** Every clicked node/edge/selection becomes an `@ label` chip (risky refs red, ✕ to
-remove) — multi-reference, Cursor-style. Copilot dock bottom-right (368px per prototype).
-Wire to `vscode.chat.createChatParticipant` + `vscode.lm`; chips define the context payload
-(files + ranges) sent with the prompt; stream replies into the dock. Suggestion chips adapt
-to whether context carries a flagged risk.
+**Status:** planned, not started. This entry replaces its own earlier version outright —
+the earlier version described BlockNet building its own in-UI AI chat/chip/Copilot-dock
+surface. That's now a locked non-goal, not a deferred one — see `PRINCIPLES.md`'s "We are
+the map, not the assistant." BlockNet computes and renders ground truth; it never hosts the
+AI conversation itself. Every dev this matters to already has an agent open somewhere
+(Claude Code, Copilot, Cursor, whatever) — the gap isn't "no chat surface," it's that those
+agents currently reconstruct cross-file structure via grep, which is fast but not exact
+(misses barrel-file re-exports, path aliases, dynamic imports; a real import-graph analyzer
+— which `core` already is, `decisions/0002` — resolves all of that correctly).
 
-**Product stance (visible in copy):** *flags and explains structural risk and stages
-changes; never silently rewrites code.* Staged changes = `WorkspaceEdit` preview with
-accept/reject per hunk.
+**What, two halves:**
+1. **A `blocknet` CLI query surface**, extending the existing `blocknet analyze <path>
+   --json` (`core/src/cli.ts` — already ships, zero VS Code deps, already usable by any
+   agent today for the block/edge/risk macro layer). New subcommands, scoped and small on
+   purpose — not a full-graph dump, so cost stays flat regardless of repo size and results
+   stay agent-context-window-friendly:
+   - `blocknet trace <file>` — a file's direct import edges (both directions), its block,
+     any risk flags touching it directly.
+   - `blocknet impact <file>` — full transitive reverse-dependency set (if I change this
+     file's public surface, what could break, arbitrarily many hops away).
+   - `blocknet path <fileA> <fileB>` — does an import chain exist between two arbitrary
+     files (either direction), and what is the actual chain.
+   - `blocknet risks` — just the flagged risk edges + evidence (file/line/statement),
+     already in the schema (`Risk.evidence`, `DATA-MODEL.md`), just not separately queryable
+     today.
+2. **User-triggered context handoff from the webview** — clicking a node/edge copies or
+   writes a small scoped context payload (the same shape the CLI queries return) for the dev
+   to paste into whatever agent session they're already running. Not a chip, not a dock, not
+   a chat window rendered by BlockNet — a handoff, not a conversation.
 
-**Why deferred:** the graph must be loved first; AI bolted onto an untrusted graph is
-noise. Also the honest self-check: we believe click-to-context is the daily-use retention
-loop — **this is the hypothesis v2.2 tests.**
+**Engine work this actually requires** (traced against current code, not guessed — see
+`docs/planning/PROGRESS-V2.md` for the full trace): `trace` is cheap and mostly wiring —
+`fileEdges` (repo-wide, file-granularity) already exists inside `analyze()`
+(`core/src/analyze.ts`) and the cache payload (`core/cache/store.ts`), it's just never
+exported from `core/src/index.ts` or turned into a queryable shape. `impact` and `path` need
+real new code — no transitive-reachability or path-reconstruction traversal exists anywhere
+in `core` today (`findCyclicFileEdges` in `core/src/risks/cycles.ts` builds an adjacency map
+but for cycle-detection, forward-only, not reverse-reachability or chain-reconstruction —
+still a reasonable structural model to build the new traversal on, including its deliberate
+explicit-stack-not-recursion style for repos with deep import chains). Both are cheap to
+*run* once `fileEdges` is resident in memory from a cached `analyze()` — same O(V+E) order
+as the already-proven-safe whole-graph cycle pass — the cost lives in getting `fileEdges` at
+all if no cache exists yet (a fresh cruise, same cost `analyze()` itself already pays cold).
+
+**Why this matters beyond TS/JS:** the actual mission this closes a gap on is bigger than
+one language — a dev working with an AI agent should never be one grep-guess away from a
+wrong mental model of their own codebase, in whatever stack they're in. `core`'s aggregator
+design (`decisions/0003`) was chosen specifically so this generalizes — v2.5's Python/LSP
+work extends the SAME `fileEdges`/risk model this query layer reads from, not a parallel one.
 
 ## v2.3 — Command palette + camera fly
 
