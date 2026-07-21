@@ -1,5 +1,5 @@
-import type { Edge, Risk } from '@blocknet/core';
-import type { WebviewBlockNode } from '../../../src/shared/protocol.js';
+import type { Edge, MicroFileEdge, Risk } from '@blocknet/core';
+import type { WebviewBlockNode, WebviewMicroFileNode } from '../../../src/shared/protocol.js';
 
 // Static fixture data for Task 7 (docs/planning/TASKS-V1.md) — live graph.macro/risks.update
 // data replaces this in Task 8. Shapes mirror a small real monorepo closely enough to
@@ -41,3 +41,54 @@ export const sampleEdges: Edge[] = [
   { id: 'web-db', source: 'apps/web', target: 'packages/db', importCount: 2, risk: boundaryRisk },
   { id: 'ui-db', source: 'packages/ui', target: 'packages/db', importCount: 1 },
 ];
+
+// v2.0 micro view (docs/planning/ROADMAP-V2.md) dev/QA fixture — one block (services/gateway)
+// exercises a real intra-block cycle (guard.ts <-> auth-client.ts, the exact "deliberate v1
+// scope boundary" analyze-micro.ts's header comment describes closing), apps/web exercises a
+// dirty marker on the file that made the real BOUNDARY import, and packages/ui is a plain,
+// risk-free block with no intra-block edges at all — three distinct visual states in one
+// static dataset, mirroring sample-graph.ts's own "exercise every state at once" design.
+function microFile(id: string, loc: number, opts: { dirty?: boolean; risk?: boolean } = {}): WebviewMicroFileNode {
+  const name = id.split('/').at(-1) ?? id;
+  return { id, name, path: id, loc, dirty: opts.dirty ?? false, risk: opts.risk ?? false };
+}
+
+function microEdge(source: string, target: string, risk = false): MicroFileEdge {
+  return { id: `${source}->${target}`, source, target, risk };
+}
+
+export const sampleMicroByBlock: Record<string, { files: WebviewMicroFileNode[]; edges: MicroFileEdge[] }> = {
+  'services/gateway': {
+    files: [
+      microFile('services/gateway/src/index.ts', 12),
+      microFile('services/gateway/src/middleware/guard.ts', 48, { risk: true }),
+      microFile('services/gateway/src/middleware/auth-client.ts', 31, { risk: true }),
+      microFile('services/gateway/src/routes.ts', 96),
+    ],
+    edges: [
+      microEdge('services/gateway/src/index.ts', 'services/gateway/src/routes.ts'),
+      microEdge('services/gateway/src/middleware/guard.ts', 'services/gateway/src/middleware/auth-client.ts', true),
+      microEdge('services/gateway/src/middleware/auth-client.ts', 'services/gateway/src/middleware/guard.ts', true),
+    ],
+  },
+  'services/auth': {
+    files: [microFile('services/auth/src/index.ts', 20), microFile('services/auth/src/verify.ts', 64)],
+    edges: [microEdge('services/auth/src/index.ts', 'services/auth/src/verify.ts')],
+  },
+  'apps/web': {
+    files: [
+      microFile('apps/web/lib/data.ts', 58, { dirty: true, risk: true }),
+      microFile('apps/web/lib/format.ts', 27),
+      microFile('apps/web/app/page.tsx', 41),
+    ],
+    edges: [microEdge('apps/web/app/page.tsx', 'apps/web/lib/data.ts'), microEdge('apps/web/lib/data.ts', 'apps/web/lib/format.ts')],
+  },
+  'packages/db': {
+    files: [microFile('packages/db/src/index.ts', 8), microFile('packages/db/src/internal/pool.ts', 73)],
+    edges: [microEdge('packages/db/src/index.ts', 'packages/db/src/internal/pool.ts')],
+  },
+  'packages/ui': {
+    files: [microFile('packages/ui/src/Button.tsx', 45), microFile('packages/ui/src/Card.tsx', 39)],
+    edges: [],
+  },
+};
