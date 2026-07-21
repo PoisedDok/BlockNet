@@ -2,14 +2,29 @@
 
 ## Current state
 
-BlockNet is pre-Checkpoint A (see [`docs/architecture/LAYERS.md`](docs/architecture/LAYERS.md)):
-only `core/` exists. There is no VS Code extension to run yet, so there's no F5 dev-host
-workflow — that lands in Task 6 (`docs/planning/TASKS-V1.md`), once `core` is validated on
-real repos. This section will be filled in then.
+BlockNet has passed Checkpoint A (real-repo truth gate) and Checkpoint B (engine complete,
+`graph.json` schema frozen) — see [`docs/architecture/LAYERS.md`](docs/architecture/LAYERS.md).
+Tasks 1–9 of the v1 plan are done: `core/` (the analysis engine) and `extension/` (the VS Code
+host + React Flow webview) are both built and tested. Only Task 10 (packaging/publishing)
+remains before v1 ships.
 
 **Before starting work, check [`docs/planning/PROGRESS.md`](docs/planning/PROGRESS.md)** —
 it tracks what's actually done vs. `TASKS-V1.md`'s plan and names the next task, so you don't
 have to re-derive state from git history.
+
+## Running the extension (F5 dev host)
+
+Open this repo in VS Code, then press F5 (or Run → Start Debugging) — this launches an
+Extension Development Host window with BlockNet loaded. Build the webview bundle first if
+you haven't (`npm run build --workspace=extension/webview`), since `extension/src/panel.ts`
+serves the built `extension/webview/dist/` output, not a dev server. Run `BlockNet: Show
+Architecture` from the command palette in the dev host window, on a folder containing a
+TS/JS project.
+
+For iterating on the webview UI alone without a real VS Code host, `npm run dev
+--workspace=extension/webview` starts a Vite dev server serving `?sample=1` (a small fixture
+with one real risk cycle) or `?stress=1` (30 blocks/100 edges) — see `App.tsx`'s dev/QA
+fixture bypass. This never touches `acquireVsCodeApi()`, so it also runs in a plain browser.
 
 ## Setup
 

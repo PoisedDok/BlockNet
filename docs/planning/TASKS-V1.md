@@ -204,84 +204,84 @@ BlockNet/
 
 ### Phase 1: The Engine (headless — this is the whole ballgame)
 
-#### Task 1: Scaffold monorepo + `core` package with CLI skeleton
+#### Task 1: Scaffold monorepo + `core` package with CLI skeleton ✅ done
 **Description:** npm-workspaces monorepo; `core/` builds with tsup/tsc; `blocknet analyze
 <path>` runs and emits an empty-but-valid `graph.json`; vitest wired.
 **Acceptance criteria:**
-- [ ] `npm run build && npx blocknet analyze .` emits schema-valid JSON
-- [ ] `core/` has zero `vscode` imports (enforced by a lint rule or test)
+- [x] `npm run build && npx blocknet analyze .` emits schema-valid JSON
+- [x] `core/` has zero `vscode` imports (enforced by a lint rule or test)
 **Verification:** `npm test` green; CLI runs on this repo.
 **Dependencies:** None. **Scope:** S.
 
-#### Task 2: Block auto-detection (AD-5 cascade)
+#### Task 2: Block auto-detection (AD-5 cascade) ✅ done
 **Description:** Implement workspaces → tsconfig refs → conventional folders → flat-`src/`
 fallback. Emit `BlockNode[]` with tech pills derived from each block's dependencies.
 **Acceptance criteria:**
-- [ ] Fixture monorepo yields one block per workspace member
-- [ ] Fixture flat repo yields blocks from top-level `src/` folders
-- [ ] Tech pills reflect real deps (e.g. `react`, `pg`, `express`)
+- [x] Fixture monorepo yields one block per workspace member
+- [x] Fixture flat repo yields blocks from top-level `src/` folders
+- [x] Tech pills reflect real deps (e.g. `react`, `pg`, `express`)
 **Verification:** unit tests on both fixtures; CLI output inspected on one real repo.
 **Dependencies:** Task 1. **Scope:** M.
 
-#### Task 3: Edge extraction via dependency-cruiser + block aggregation
+#### Task 3: Edge extraction via dependency-cruiser + block aggregation ✅ done
 **Description:** Run dep-cruiser programmatically; resolve file→file import edges (tsconfig
 paths, aliases, workspaces); map files→blocks; aggregate to block-level edges with
 `importCount` and per-edge evidence (file, line, statement).
 **Acceptance criteria:**
-- [ ] File edges correct on fixture (incl. an aliased and a barrel import)
-- [ ] Block edges = aggregation of crossing file edges, with counts
-- [ ] Evidence array populated for every block edge
+- [x] File edges correct on fixture (incl. an aliased and a barrel import)
+- [x] Block edges = aggregation of crossing file edges, with counts
+- [x] Evidence array populated for every block edge
 **Verification:** unit tests; run against a real Aether repo and manually spot-check 10 edges.
 **Dependencies:** Task 2. **Scope:** M.
 
-#### Checkpoint A — TRUTH GATE (the go/no-go for the whole product)
-- [ ] Run `blocknet analyze` on **2–3 real repos** (Aether repos + one large OSS monorepo)
-- [ ] Block graph is *true*: no phantom edges, no missing obvious edges (manual audit)
-- [ ] Cold analysis time measured and recorded; acceptable with a progress bar (<~60s large)
-- [ ] Flat-repo fallback produces *meaningful* blocks, not noise
-- [ ] **Human review with Krish before Phase 2.** If truth fails here, fix the engine —
+#### Checkpoint A — TRUTH GATE (the go/no-go for the whole product) ✅ signed off 2026-07-19
+- [x] Run `blocknet analyze` on **2–3 real repos** (Aether repos + one large OSS monorepo)
+- [x] Block graph is *true*: no phantom edges, no missing obvious edges (manual audit)
+- [x] Cold analysis time measured and recorded; acceptable with a progress bar (<~60s large)
+- [x] Flat-repo fallback produces *meaningful* blocks, not noise
+- [x] **Human review with Krish before Phase 2.** If truth fails here, fix the engine —
       do not proceed to UI. The demo dazzling on fixtures and disappointing on real repos
       is the project's #1 failure mode.
 
-#### Task 4: Risk checks — cycles + boundary (AD-6)
+#### Task 4: Risk checks — cycles + boundary (AD-6) ✅ done
 **Description:** Tarjan SCC over the file graph, flag member edges, lift to block edges.
 Boundary deep-import rule using each block's declared entry.
 **Acceptance criteria:**
-- [ ] Fixture with a 3-file cycle → exactly those edges flagged CIRCULAR, none others
-- [ ] Deep-import fixture flagged BOUNDARY; entry-point import NOT flagged
-- [ ] Each risk carries tag/oneLine/explain/fix/evidence
+- [x] Fixture with a 3-file cycle → exactly those edges flagged CIRCULAR, none others
+- [x] Deep-import fixture flagged BOUNDARY; entry-point import NOT flagged
+- [x] Each risk carries tag/oneLine/explain/fix/evidence
 **Verification:** unit tests; zero false positives on the Checkpoint-A real repos.
 **Dependencies:** Task 3. **Scope:** M.
 
-#### Task 5: Cache + incremental invalidation (AD-8)
+#### Task 5: Cache + incremental invalidation (AD-8) ✅ done
 **Description:** Content-hash manifest; save/load full result; delta pass re-analyzing only
 affected files + affected block edges + affected SCCs; full bust on config change.
 **Acceptance criteria:**
-- [ ] Second `analyze` on unchanged repo loads from cache (measured ≫ faster)
-- [ ] Editing one file re-analyzes only it + dependents' edges (test asserts scope)
-- [ ] Touching `tsconfig.json` busts the whole cache
+- [x] Second `analyze` on unchanged repo loads from cache (measured ≫ faster)
+- [x] Editing one file re-analyzes only it + dependents' edges (test asserts scope)
+- [x] Touching `tsconfig.json` busts the whole cache
 **Verification:** unit tests with a temp-dir repo mutated between runs.
 **Dependencies:** Task 4. **Scope:** M.
 
-### Checkpoint B — Engine complete
-- [ ] All core tests pass; CLI is honest, fast, incremental on real repos
-- [ ] `graph.json` schema frozen for the webview
+### Checkpoint B — Engine complete ✅ reached 2026-07-19
+- [x] All core tests pass; CLI is honest, fast, incremental on real repos
+- [x] `graph.json` schema frozen for the webview
 
 ### Phase 2: The Extension Shell
 
-#### Task 6: Extension host — activation, child process, progress, cache wiring
+#### Task 6: Extension host — activation, child process, progress, cache wiring ✅ done
 **Description:** Lazy activation (`BlockNet: Show Architecture` command +
 workspace-contains-tsconfig). Spawn `core` in a child process; stream
 `analysis/progress`; persist cache under `context.storageUri`; file watcher drives
 incremental re-analysis on save/add/delete/rename.
 **Acceptance criteria:**
-- [ ] Extension host thread never blocks during analysis (typing stays smooth)
-- [ ] Progress UI during first import; instant cache load on reopen
-- [ ] Save of one file triggers scoped re-analysis and a `graph/macro` push
+- [x] Extension host thread never blocks during analysis (typing stays smooth)
+- [x] Progress UI during first import; instant cache load on reopen
+- [x] Save of one file triggers scoped re-analysis and a `graph/macro` push
 **Verification:** manual run on a real repo via F5 extension dev host.
 **Dependencies:** Task 5. **Scope:** M.
 
-#### Task 7: Webview — React Flow macro graph with prototype fidelity
+#### Task 7: Webview — React Flow macro graph with prototype fidelity ✅ done
 **Description:** React app (vite/esbuild, strict CSP, self-hosted fonts). Block cards per
 the design tokens (§Design Tokens of the handoff README): gradient cards, status dot, risk
 pill (`N× ⚠`), path in mono, tech pills, connection-count badge. Edges: bezier
@@ -289,33 +289,45 @@ right-port→left-port, white dashed animated normal / red solid pulsing risk wi
 midpoint badge. Pan/zoom (clamp k∈[0.3,2.4]), node drag, selection dims unrelated to
 ~0.1–0.16 opacity. Feed with **static fixture data first**.
 **Acceptance criteria:**
-- [ ] Visual parity with prototype macro view (side-by-side check)
-- [ ] Pan/zoom/drag/select smooth at 30 blocks / 100 edges
-- [ ] Works in light and dark host themes
+- [x] Visual parity with prototype macro view (side-by-side check)
+- [x] Pan/zoom/drag/select smooth at 30 blocks / 100 edges
+- [x] Works in light and dark host themes
 **Verification:** manual against `BlockNet.dc.html`; theme toggle check.
 **Dependencies:** Task 1 (schema only — parallelizable with Tasks 2–6). **Scope:** L
 (pure rendering; split into card/edges/interactions commits).
 
-#### Task 8: Bridge — live data + persisted layout
+#### Task 8: Bridge — live data + persisted layout ✅ done
 **Description:** Replace fixtures with live `graph/macro` + `risks/update`; implement
 `layout/persist`/`layout/restore` via `workspaceState`; risk badge click shows the risk's
 oneLine/explain/fix + evidence in a lightweight popover (not the full v2 inspector).
 **Acceptance criteria:**
-- [ ] Real repo renders live; save-edit round-trip updates the graph
-- [ ] Node positions survive reload
-- [ ] Risk popover shows real evidence (file:line import statement)
-**Verification:** end-to-end manual flow on a real repo.
+- [x] Real repo renders live; save-edit round-trip updates the graph
+- [x] Node positions survive reload
+- [x] Risk popover shows real evidence (file:line import statement)
+**Verification:** end-to-end manual flow on a real repo. Also live-tested interactively via
+Playwright + a real dev-driven session (docs/planning/PROGRESS.md's Task 8 entry) — found and
+fixed 5 real bugs neither static review pass caught.
 **Dependencies:** Tasks 6, 7. **Scope:** M.
 
-#### Task 9: Native delegation — split-screen open, diff
-**Description:** Block card ⤢ (and evidence file:line links) →
+#### Task 9: Native delegation — split-screen open, diff ✅ done
+**Description:** Evidence file:line links (RiskPopover) →
 `showTextDocument({ viewColumn: ViewColumn.Beside, selection: range })` so BlockNet stays
-open beside the code (Claude Code pattern). "Open diff" → `vscode.diff` working-tree vs
-HEAD. Git dirty state → `● edited` amber marker on blocks containing dirty files.
+open beside the code (Claude Code pattern). Git dirty state → `● edited` amber marker on
+blocks containing dirty files.
+**Scope correction (2026-07-21, agreed with Krish):** the original "Block card ⤢" criterion
+below is dropped from v1. v1 has no drill-down/micro view — a block is always a directory
+(`BlockNode.path`), never a single file, so there is no canonical file for a block-level ⤢ to
+open. Checked directly against the design-handoff prototype (`BlockNet.dc.html`): the ⤢
+affordance only ever exists on its `microNodes` (per-file cards), never on `macroNodes`
+(blocks) — confirming this was never actually v1-shaped. Block/file-level ⤢ and "open diff"
+now belong to [ROADMAP-V2.md](./ROADMAP-V2.md)'s v2.0 micro view, where each card is a single
+file and the target is unambiguous. `open/diff` stays defined in the protocol but
+unimplemented on both sides pending that trigger.
 **Acceptance criteria:**
-- [ ] ⤢ opens the real editor in the adjacent column; graph panel remains visible
-- [ ] Evidence link opens the file at the exact import line
-- [ ] Dirty blocks show the amber marker
+- [ ] ~~⤢ opens the real editor in the adjacent column; graph panel remains visible~~ —
+      deferred to v2.0 (see scope correction above)
+- [x] Evidence link opens the file at the exact import line
+- [x] Dirty blocks show the amber marker
 **Verification:** manual; confirm no webview-embedded editor anywhere.
 **Dependencies:** Task 8. **Scope:** S.
 

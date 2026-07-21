@@ -4,9 +4,12 @@ Render a TS/JS repository's block-level architecture graph — accurately and fa
 import cycles and one boundary violation flagged, inside a VS Code webview that sits beside
 the editor.
 
-> **Status: pre-Checkpoint A.** The engine (`core/`) is under construction and unproven on
-> real repos. There is no extension yet — see [`docs/architecture/LAYERS.md`](docs/architecture/LAYERS.md)
-> for why UI work doesn't start until the engine is validated.
+> **Status: pre-release, Tasks 1–9 of 10 done.** Checkpoint A (real-repo truth gate) and
+> Checkpoint B (engine complete, schema frozen) have both passed. The engine (`core/`) and the
+> VS Code extension (host + webview) are built and tested; only Task 10 (packaging/publishing)
+> remains — see [`docs/planning/PROGRESS.md`](docs/planning/PROGRESS.md) for exactly what's
+> done vs. pending, and [`docs/architecture/LAYERS.md`](docs/architecture/LAYERS.md) for why UI
+> work didn't start until the engine was validated.
 
 ## What this is
 
@@ -20,7 +23,8 @@ Full architecture, decisions, and rationale: [`docs/`](docs/README.md).
 ## Repo layout
 
 - `core/` — `@blocknet/core`, a pure TypeScript library + CLI. Zero VS Code dependencies.
-- `extension/` — the VS Code extension host + webview. Does not exist yet (see Status above).
+- `extension/` — the VS Code extension host (`src/`) + React Flow webview (`webview/`, its own
+  npm workspace).
 - `docs/` — architecture (ground truth), decisions (ADRs), principles, and planning.
 
 ## Development
