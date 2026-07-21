@@ -1,0 +1,64 @@
+.bn-graph-view {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+.bn-macro-layer,
+.bn-micro-layer {
+  position: absolute;
+  inset: 0;
+  transition:
+    opacity 0.45s ease,
+    transform 0.5s ease;
+}
+
+.bn-macro-layer {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.bn-macro-layer[data-hidden] {
+  opacity: 0;
+  transform: scale(1.06);
+  pointer-events: none;
+}
+
+.bn-micro-layer {
+  opacity: 0;
+  transform: scale(0.94);
+  pointer-events: none;
+}
+
+.bn-micro-layer[data-visible] {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+.bn-micro-loading {
+  position: absolute;
+  top: 66px;
+  left: 20px;
+  z-index: 30;
+  font: 12px var(--bn-font-mono);
+  color: var(--bn-text-muted);
+  background: var(--bn-card-bg);
+  border: 1px solid var(--bn-border);
+  padding: 8px 13px;
+  border-radius: var(--bn-radius-control);
+}
+
+.bn-micro-banner {
+  position: absolute;
+  top: 66px;
+  left: 20px;
+  z-index: 30;
+  font: 12px var(--bn-font-mono);
+  color: var(--bn-risk-strong);
+  background: var(--bn-risk-soft);
+  border: 1px solid var(--bn-risk-border);
+  padding: 8px 13px;
+  border-radius: var(--bn-radius-control);
+  max-width: 360px;
+}
