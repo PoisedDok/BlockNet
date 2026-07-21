@@ -54,6 +54,12 @@
   text-overflow: ellipsis;
 }
 
+.bn-card-dirty {
+  font: 9.5px var(--bn-font-mono);
+  color: var(--bn-dirty);
+  white-space: nowrap;
+}
+
 .bn-card-risk-pill {
   margin-left: auto;
   font: 600 10px var(--bn-font-mono);

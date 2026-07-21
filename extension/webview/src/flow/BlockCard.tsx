@@ -8,6 +8,7 @@ export type BlockCardProps = {
   pills: string[];
   riskCount: number;
   connectionCount: number;
+  dirty: boolean;
   selected: boolean;
   dimmed: boolean;
   onSelect?: () => void;
@@ -26,6 +27,7 @@ export function BlockCard({
   pills,
   riskCount,
   connectionCount,
+  dirty,
   selected,
   dimmed,
   onSelect,
@@ -40,7 +42,7 @@ export function BlockCard({
     }
   }
 
-  const label = blockAriaLabel({ name, path, riskCount, connectionCount });
+  const label = blockAriaLabel({ name, path, riskCount, connectionCount, dirty });
 
   return (
     <div
@@ -58,6 +60,11 @@ export function BlockCard({
       <div className="bn-card-row">
         <span className="bn-card-dot" aria-hidden="true" />
         <span className="bn-card-name">{name}</span>
+        {dirty && (
+          <span className="bn-card-dirty" title="Contains uncommitted changes">
+            ● edited
+          </span>
+        )}
         {hasRisk && (
           <span className="bn-card-risk-pill">
             {riskCount}× ⚠

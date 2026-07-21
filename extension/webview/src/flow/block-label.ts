@@ -3,11 +3,10 @@
  * wrapper already owns tabIndex/role/keyboard handling once a node is mounted inside
  * <ReactFlow>, so BlockNode.tsx must not duplicate a second, nested interactive element —
  * see BlockCard's `interactive` prop). */
-export function blockAriaLabel(args: { name: string; path: string; riskCount: number; connectionCount: number }): string {
-  const { name, path, riskCount, connectionCount } = args;
+export function blockAriaLabel(args: { name: string; path: string; riskCount: number; connectionCount: number; dirty?: boolean }): string {
+  const { name, path, riskCount, connectionCount, dirty = false } = args;
   const connections = `${connectionCount} connection${connectionCount === 1 ? '' : 's'}`;
-  if (riskCount > 0) {
-    return `${name}, ${path}, ${riskCount} risk${riskCount === 1 ? '' : 's'}, ${connections}`;
-  }
-  return `${name}, ${path}, ${connections}`;
+  const risk = riskCount > 0 ? `, ${riskCount} risk${riskCount === 1 ? '' : 's'}` : '';
+  const edited = dirty ? ', uncommitted changes' : '';
+  return `${name}, ${path}${risk}, ${connections}${edited}`;
 }

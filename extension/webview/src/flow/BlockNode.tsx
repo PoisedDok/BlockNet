@@ -7,6 +7,7 @@ export type BlockNodeData = {
   pills: string[];
   riskCount: number;
   connectionCount: number;
+  dirty: boolean;
   dimmed: boolean;
 };
 
@@ -30,6 +31,7 @@ export function BlockNode({ data, selected }: NodeProps<BlockNodeType>) {
         pills={data.pills}
         riskCount={data.riskCount}
         connectionCount={data.connectionCount}
+        dirty={data.dirty}
         selected={!!selected}
         dimmed={data.dimmed}
         interactive={false}

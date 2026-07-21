@@ -9,6 +9,7 @@ const baseProps = {
   pills: ['express', 'zod'],
   riskCount: 0,
   connectionCount: 3,
+  dirty: false,
   selected: false,
   dimmed: false,
 };
@@ -62,5 +63,20 @@ describe('BlockCard', () => {
   it('mentions the risk count in its accessible name when at risk', () => {
     render(<BlockCard {...baseProps} riskCount={1} />);
     expect(screen.getByRole('button', { name: /1 risk/i })).toBeInTheDocument();
+  });
+
+  it('does not render the dirty marker when dirty is false', () => {
+    render(<BlockCard {...baseProps} dirty={false} />);
+    expect(screen.queryByText(/edited/)).not.toBeInTheDocument();
+  });
+
+  it('renders the ● edited marker when dirty is true', () => {
+    render(<BlockCard {...baseProps} dirty={true} />);
+    expect(screen.getByText(/edited/)).toBeInTheDocument();
+  });
+
+  it('mentions uncommitted changes in its accessible name when dirty', () => {
+    render(<BlockCard {...baseProps} dirty={true} />);
+    expect(screen.getByRole('button', { name: /uncommitted changes/i })).toBeInTheDocument();
   });
 });
