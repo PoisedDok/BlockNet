@@ -1,7 +1,10 @@
 # Architecture — End-to-End Flows
 
-Four flows cover every way data moves through the system. If a new feature needs a fifth,
-it doesn't belong in v1 (check `docs/planning/ROADMAP-V2.md`).
+Five flows cover every way data moves through the system as of v2.0. The first four were v1's
+whole scope ("if a new feature needs a fifth, it doesn't belong in v1" — that line is now
+history, not a live constraint: v2.0's micro view earned flow 5 by proving the macro layer
+true and fast first, per `docs/planning/ROADMAP-V2.md`'s own promotion order). A v2.1+ feature
+needing a sixth still belongs in its own layer's turn, not bolted onto an unrelated flow here.
 
 ## 1. Cold analyze (first time a repo is opened)
 
@@ -120,24 +123,115 @@ Task 9's original plan was also a block-card ⤢ triggering the identical `open/
 built: a block is always a directory (`BlockNode.path`), never a single file — there's no
 canonical file for a block-level ⤢ to target without a drill-down step v1 doesn't have (the
 design-handoff prototype confirms this: its ⤢ affordance only ever exists on file-level
-cards). Deferred to `ROADMAP-V2.md`'s v2.0 micro view, where each card is a single file. `open/
-diff` (`vscode.diff` working-tree vs HEAD) is defined in the protocol but has the same gap —
-no v1 UI sends it — and is deferred alongside it.
+cards). As of v2.0, `FileCard`'s ⤢ (`extension/webview/src/flow/FileCard.tsx`, flow 5 below)
+is exactly that file-level trigger — a second sender into this same flow, `commands/
+open-file.ts` unchanged. `open/diff` (`vscode.diff` working-tree vs HEAD) is defined in the
+protocol but still has no UI sender anywhere, block or file level.
 
-## 4. Layout persistence (drag a node)
+## 4. Layout persistence (drag a node, or bend an edge — ROADMAP-V2.md)
 
 ```mermaid
 sequenceDiagram
     actor Dev
-    participant WV as webview: BlockCanvas
+    participant WV as webview: BlockCanvas / RiskEdge
     participant Cam as camera-store.ts
     participant Panel as panel.ts
     participant State as state.ts
 
-    Dev->>WV: drag a block card
-    WV->>Cam: update position (optimistic, instant, local only)
-    Cam->>Cam: debounce ~300ms
-    Cam->>Panel: postMessage layout/persist {positions}
-    Panel->>State: onLayoutPersist(positions) → setPositions(context.workspaceState, positions)
+    Dev->>WV: drag a block card, OR drag an edge's waypoint handle
+    WV->>Cam: movePosition(id, pos) OR moveWaypoints(edgeId, waypoints[])\n(waypoints is always the FULL replacement array for that edge, never a single\npoint to merge — an empty array removes the override entirely, same\nabsent-id-falls-through-to-computed-default contract as positions;\noptimistic, instant, local only)
+    Cam->>Cam: debounce ~300ms (ONE shared timer for both maps — a position\ndrag and a waypoint drag close together in time coalesce into one send)
+    Cam->>Panel: postMessage layout/persist {positions, edgeWaypoints}
+    Panel->>State: onLayoutPersist(positions, edgeWaypoints) → setPositions(...) +\nsetEdgeWaypoints(context.workspaceState, edgeWaypoints)
     Note over WV,State: on next panel open, commands/show-architecture.ts reads state.ts\nand awaits panel.whenReady() before pushing layout/restore BEFORE\ngraph/macro — first paint has no flash. panel.ts doesn't import state.ts\ndirectly — onLayoutPersist is a callback show-architecture.ts supplies at\ncreateOrReveal() time, so panel.ts stays a generic message-lifecycle shell
 ```
+
+An edge's waypoint handle renders via React Flow's `EdgeLabelRenderer` (a shared HTML overlay
+above all edges' SVG, not an SVG element inside the edge's own group — an inline SVG circle was
+tried first and found, live, to lose hit-testing to unrelated edges' own wide interaction
+strokes) and counter-scales by `1/zoom` so it stays a constant, grabbable size regardless of how
+zoomed out the canvas is (`PROTOCOL.md`'s "Draggable edge waypoints" section has the full
+mechanism, including two real bugs found via live Playwright testing during this feature's own
+build and how each was fixed).
+
+## 5. Micro dive-in (block double-click) — v2.0
+
+```mermaid
+sequenceDiagram
+    actor Dev
+    participant WV as webview: GraphView/BlockCanvas
+    participant Panel as panel.ts
+    participant Cmd as commands/show-architecture.ts
+    participant Runner as analysis-runner.ts
+    participant Worker as core: ipc-worker.ts (forked, mode:'micro')
+
+    Dev->>WV: double-click a block card
+    WV->>WV: GraphView.handleDive(blockId) — phase:'diving', shows a loading indicator;\nmacro layer stays fully visible and interactive (no optimistic cross-fade — a real\nhost round-trip is in flight, "never fake it")
+    WV->>Panel: postMessage graph/micro/request {blockId}
+    Panel->>Cmd: dispatch (onMicroRequest callback, wired at createOrReveal)
+    Cmd->>Runner: runMicro({rootDir, cacheDir, blockId}) — independent generation\ncounter from macro's own (PROTOCOL.md)
+    Runner->>Worker: fork + send({mode:'micro', rootDir, cacheDir, blockId})
+    Worker->>Worker: analyze-micro.ts: readCache() → one whole-repo walkRealFiles(rootDir)\nfiltered by resolveBlock() to this block's files (matches computeBlockShape()'s own\nfileCount exactly — a per-block-scoped walk diverged on nested blocks and\ncross-block symlinks, both found via real-repo verification) + real LOC (skipped,\ndegrades to 0, for anything over 2MB) + re-run findCyclicFileEdges() over the\ncached fileEdges — no dependency-cruiser re-cruise
+    alt cache has this block
+        Worker-->>Runner: send({type:'micro-result', micro: MicroGraphResult})
+        Runner->>Cmd: MicroOutcome success
+        Cmd->>Cmd: git.ts: getDirtyFiles(rootDir) — direct membership, not\ndirty-blocks.ts's path-prefix aggregation (file granularity is exact)
+        Cmd-->>Panel: postMessage graph/micro {blockId, files: WebviewMicroFileNode[], edges}
+    else no cache yet, or blockId no longer in the cached snapshot
+        Worker-->>Runner: send({type:'error', message})
+        Runner->>Cmd: MicroOutcome error
+        Cmd-->>Panel: postMessage graph/micro/error {blockId, message}
+    end
+    Panel-->>WV: graph/micro or graph/micro/error
+    WV->>WV: GraphView compares the response's blockId against its own local\npendingBlockId (discards a late response for a block the user has since\nnavigated away from) — success: mounts FileCanvas, cross-fades in\n(~0.45–0.5s); error: stays on macro, shows an inline banner (~4s)
+    WV-->>Dev: file-level graph renders, or a friendly inline notice
+```
+
+Every fork here is one-shot (same "fork → one message in → one message out → kill" lifecycle
+as the macro flow, `PROCESS-BOUNDARY.md`) and gated by its own `isLatestMicro()` generation
+counter — see `PROTOCOL.md`'s "Micro (file-level) requests" section for the full dual-gate (and
+webview-side third layer) race-safety argument, the same class of stale-post bug Task 9's
+review already found and fixed once for `graph/macro`. `analyze-micro.ts` never re-runs
+dependency-cruiser — it's a read of the last macro run's cache (`cache/store.ts`'s persisted
+`fileEdges`) plus one whole-repo `walkRealFiles` call filtered to the requested block, which is
+what keeps a double-click cheap relative to a full re-analysis (a full re-cruise of
+`AetherArenaV2`'s real ~6,500-file repo takes ~5s; the equivalent micro request's walk-and-
+filter takes well under a second for every real block measured, including its ~5,300-file
+`open-connector` block) — cheap relative to the alternative, not literally independent of
+total repo size, since the walk itself does scan every real file, once, per request.
+
+## 6. File-level layout persistence (drag a file card, or bend a file edge — ROADMAP-V2.md)
+
+```mermaid
+sequenceDiagram
+    actor Dev
+    participant WV as webview: FileCanvas / GraphView
+    participant Cam as camera-store.ts (second instance)
+    participant Panel as panel.ts
+    participant State as state.ts
+
+    Dev->>WV: drag a file card, OR drag a file edge's waypoint handle (micro view)
+    WV->>Cam: movePosition(id, pos) OR moveWaypoints(edgeId, waypoints[])\n(optimistic, instant, local only)
+    Cam->>Cam: debounce ~300ms (its own timer, independent of the macro\ninstance's — the two hooks never share a debounce)
+    Cam->>Panel: postMessage layout/file-persist {filePositions, fileEdgeWaypoints}
+    Panel->>State: onFileLayoutPersist(filePositions, fileEdgeWaypoints) →\nsetFilePositions(...) + setFileEdgeWaypoints(context.workspaceState, ...)
+    Note over WV,State: same layout/restore-before-graph/macro ordering guarantee applies to\nthe file-level pair once a micro dive re-requests them — no separate\nrestore message exists for file-level layout; it rides the same\nlayout/restore payload as the macro maps
+```
+
+This is flow 4's exact mechanism, scoped to the micro (per-block, file-level) view rather than
+the macro (block-level) one — not a different mechanism, a second instance of it.
+`GraphView.tsx` owns a SECOND, independent `useCameraStore` call (distinct from
+`BlockCanvas.tsx`'s own internal instance) specifically because `FileCanvas` remounts fresh on
+every dive; living at `GraphView` level instead means a drag made during one dive is still
+current React state the very next dive reads, rather than resetting to whatever
+`initialFilePositions` prop was current at that earlier mount. Its `persist` callback posts
+`layout/file-persist` (`filePositions`, `fileEdgeWaypoints`) instead of the macro
+`layout/persist` (`positions`, `edgeWaypoints`) — a distinct message shape/workspaceState-key
+pair (`protocol.ts`), not two more fields folded onto the macro message, so the two hooks'
+debounce timers stay fully independent and neither's persist can be mistaken for the other's by
+the host. `panel.ts` dispatches it to an `onFileLayoutPersist` callback wired at
+`createOrReveal()` time, exactly parallel to `onLayoutPersist`; `commands/show-architecture.ts`
+supplies that callback, calling `state.ts`'s `setFilePositions` and `setFileEdgeWaypoints` — two
+separate `memento.update()` writes to their own workspaceState keys
+(`blocknet.filePositions`, `blocknet.fileEdgeWaypoints`), same accepted non-atomicity as the
+macro pair (view state, not import truth — a lost write just means a drag needs redoing).

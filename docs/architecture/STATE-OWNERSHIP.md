@@ -8,9 +8,14 @@ is a pure renderer" ([PROTOCOL.md](./PROTOCOL.md)) enforceable rather than a sug
 | Import truth (files, edges, risks) | `core` | Re-derived on every full `analyze()` call | Nothing — a full scan always trusts source over cache |
 | Content-hash manifest, `GraphResult` snapshot (last known-good), and the pre-aggregation `FileEdge[]` the delta path merges into | `core/cache` | ONE JSON file under `context.storageUri` (`cache/store.ts`), not three separate files — see below | Disk, across VS Code restarts — this is what makes a warm open instant, and what the content-changed delta path merges into |
 | `GraphResult` (current, in-memory) | Extension host | In-memory in `extension.ts`, pushed to webview | One VS Code session (reloaded from the disk snapshot on restart, then delta-checked against the manifest) |
-| Node positions | Extension host | `context.workspaceState` | Disk, across VS Code restarts, per-workspace |
+| Node positions (macro blocks) | Extension host | `context.workspaceState` (`blocknet.positions`) | Disk, across VS Code restarts, per-workspace |
+| Edge waypoints (macro, draggable/bendable edge routing, ROADMAP-V2.md) | Extension host | `context.workspaceState` (`blocknet.edgeWaypoints` — a separate key from node positions, `state.ts`) | Disk, across VS Code restarts, per-workspace — identical sparse-override contract as node positions |
+| File positions (micro view, per dived-into block) | Extension host | `context.workspaceState` (`blocknet.filePositions`, `state.ts`) — mutated live by `GraphView.tsx`'s own SECOND, independent `useCameraStore` instance, posted to the host as `layout/file-persist` | Disk, across VS Code restarts, per-workspace — identical sparse-override contract as the macro pair above |
+| File edge waypoints (micro view, per dived-into block) | Extension host | `context.workspaceState` (`blocknet.fileEdgeWaypoints`, `state.ts`) — same `layout/file-persist` message and camera-store instance as file positions above | Disk, across VS Code restarts, per-workspace — identical sparse-override contract as the macro pair above |
 | Camera (pan/zoom/selection) | Webview | `camera-store.ts`, in-memory | Nothing — resets on panel reload (positions do persist, see above) |
-| Dirty-file (git) markers | Extension host | Queried live from the git API on each `graph/macro` push (`git.ts` + `dirty-blocks.ts`, Task 9) | Nothing — always fresh |
+| Dirty-file (git) markers | Extension host | Queried live from the git API on each `graph/macro` push (`git.ts` + `dirty-blocks.ts`, Task 9) and each `graph/micro` push (`git.ts`, direct membership — v2.0) | Nothing — always fresh |
+| Micro (file-level) graph for the currently-viewed block | Extension host, computed on demand | Never persisted — `analyze-micro.ts` recomputes from `core/cache`'s last macro snapshot on every `graph/micro/request` (v2.0, `ROADMAP-V2.md`) | Nothing — a re-dive into the same block always re-fetches, never serves a stale client-held copy |
+| Macro↔micro view state (which layer is active, cross-fade phase) | Webview | `GraphView.tsx`, in-memory (v2.0) | Nothing — resets on panel reload, same posture as camera (pan/zoom/selection) above |
 
 ## The rule this enforces
 
