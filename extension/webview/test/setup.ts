@@ -58,6 +58,20 @@ class DOMMatrixReadOnlyStub {
 }
 globalThis.DOMMatrixReadOnly = DOMMatrixReadOnlyStub as unknown as typeof DOMMatrixReadOnly;
 
+// jsdom has no Pointer Capture implementation at all (confirmed: Element.prototype.
+// setPointerCapture is undefined, not just a no-op) — RiskEdge.tsx's draggable waypoint handle
+// (ROADMAP-V2.md's draggable/bendable edge routing) calls setPointerCapture/
+// releasePointerCapture on every real pointerdown/up, which every real browser (including VS
+// Code's Electron/Chromium webview host) fully supports. This is a test-environment gap, not a
+// production one, so it's stubbed globally here — the same posture as the ResizeObserver/
+// DOMMatrixReadOnly stubs above — rather than guarded with a defensive `?.()` in production
+// code for an environment that can't actually happen there.
+if (!Element.prototype.setPointerCapture) {
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+  Element.prototype.hasPointerCapture = () => false;
+}
+
 // Note for whoever next writes an interaction test against a component that mounts
 // <BlockCanvas>: use fireEvent.click, not userEvent.click, on anything React-Flow-rendered
 // (a node or the pane). React Flow's pane and draggable nodes attach their own native

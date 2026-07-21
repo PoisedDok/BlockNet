@@ -44,6 +44,39 @@
   background: var(--bn-border);
 }
 
+.bn-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 12px var(--bn-font-mono);
+}
+
+.bn-breadcrumb-root {
+  color: var(--bn-text-muted);
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.bn-breadcrumb-root:hover {
+  color: var(--bn-text-primary);
+}
+
+.bn-breadcrumb-root:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, var(--bn-border-selected));
+  outline-offset: 2px;
+}
+
+.bn-breadcrumb-sep {
+  color: var(--bn-text-faint);
+}
+
+.bn-breadcrumb-current {
+  color: var(--bn-text-primary);
+}
+
 .bn-legend {
   display: flex;
   align-items: center;
