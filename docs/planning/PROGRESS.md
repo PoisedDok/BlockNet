@@ -11,7 +11,7 @@ not rewrite TASKS-V1.md/ROADMAP-V2.md themselves (`CLAUDE.md`).
 | Phase 1 — Engine (Tasks 1-5) | Tasks 1-5 done. |
 | Checkpoint A (truth gate) | Signed off with Krish 2026-07-19 — see below. |
 | Checkpoint B (engine complete) | Reached 2026-07-19 — see Task 5's entry. `graph.json` schema frozen. |
-| Phase 2 — Extension (Tasks 6-9) | Tasks 6-7 done. Pending: real F5 manual verification of both (no VS Code GUI in the building environment — see Task 6's and Task 7's entries; Task 7's own verification used a headless-browser screenshot comparison instead, not a substitute for a real extension host). Tasks 8-9 not started. |
+| Phase 2 — Extension (Tasks 6-9) | Tasks 6-9 done. Pending: real F5 manual verification (no VS Code GUI in the building environment — see Task 6's and Task 7's entries; interactive verification for Tasks 7-9 used a headless-browser (Playwright) session against a real dev server instead, not a substitute for a real extension host). |
 | Phase 3 — Ship (Task 10) | Not started. |
 
 ## Done
@@ -732,7 +732,8 @@ Task 6 by silently building ahead into a later task's territory):
   dump) that proves the `postMessage` wiring end to end — Task 7 replaces its body wholesale,
   not incrementally.
 - `state.ts` (workspaceState position persistence) is Task 8's. `git.ts` and
-  `commands/open-file.ts` are Task 9's. None of the three exist yet.
+  `commands/open-file.ts` are Task 9's. None of the three existed at Task 6 time — all three
+  are now built; see Task 8's and Task 9's own entries below.
 - The no-workspace / multi-root-workspace degrade states render as static bodies chosen at
   panel-creation time (`panel.ts`'s `PanelState`), not the real `EmptyState.tsx` component
   Tasks 7–8 own — a deliberate, temporary stand-in so `ENGINEERING-CONSTRAINTS.md`'s "never an
@@ -1108,21 +1109,396 @@ never pixel geometry. `webview-html.ts` was checked against `cache-bridge.ts`/
 `change-buffer.ts`'s established "pure, vscode-free, directly unit-tested" pattern and found
 to genuinely follow it, not silently diverge.
 
-## Next up
+### Task 8 — Bridge: live data + persisted layout ✅ (2026-07-21)
 
-A real F5 manual verification of
-Tasks 6 and 7 together (outstanding — see "Verification actually performed" above: this
-session's environment has no VS Code CLI/GUI). Then Task 8 (bridge — live `graph/macro` +
-`risks/update` over `postMessage`, replacing Task 7's static fixtures; `layout/restore`/
-`layout/persist` via `workspaceState`; risk badge click → popover).
+**What got built**, per TASKS-V1.md's acceptance criteria (real repo renders live; save-edit
+round-trip updates the graph; node positions survive reload; risk popover shows real
+evidence):
+
+- `extension/src/shared/protocol.ts` gained `webview/ready` (`WebviewMessage`) — see "The
+  ready handshake" below for why it's load-bearing, not decorative.
+- `extension/src/state.ts` (new): `getPositions()`/`setPositions()` over a sparse
+  `Record<string, Position>`, backed by `context.workspaceState`. Takes a narrow
+  `WorkspaceMemento` structural type — the two methods it actually calls — rather than
+  importing `vscode.Memento`, the exact pattern `cache-bridge.ts` already established for
+  `context.storageUri`. **Deviates from LAYERS.md's pre-Task-8 guess**: that table placed
+  `state.ts` in Layer 4 ("VS Code host glue, imports vscode") before it was built; built
+  vscode-free instead, once it turned out to need nothing vscode-specific, and moved to Layer
+  3 in this pass. **Also corrects a real doc/reality mismatch found while building it**:
+  `DIRECTORY-TREE.md` described `state.ts` as owning "node positions + last-good manifest
+  ptr" — the last-known-good `GraphResult` snapshot already lives in `core/cache/store.ts`
+  under `context.storageUri` (`STATE-OWNERSHIP.md`), a disk cache with nothing to do with
+  `workspaceState`; that line conflated two unrelated persistence mechanisms before either was
+  actually built. `state.ts` owns positions only now, in both doc and code.
+- `panel.ts`: `createOrReveal()` takes an `onLayoutPersist` callback, wired once at
+  construction (not re-wired on reveal — see its own comment for why that's safe, not an
+  oversight) into a `webview.onDidReceiveMessage` listener that calls it on `layout/persist`.
+  New `whenReady(): Promise<void>`, a second independent `onDidReceiveMessage` subscription
+  that resolves once on the next `webview/ready`.
+- `commands/show-architecture.ts`: awaits `panel.whenReady()` before posting `layout/restore`
+  (from `state.ts`) and *then* triggering analysis — the binding ordering guarantee
+  `PROTOCOL.md` already documented as Task 8's job.
+- `extension/webview/src/host-bridge.ts` (new, Layer 5, zero `vscode` import):
+  `acquireVsCodeApi()` wrapped and memoized (VS Code throws if it's called twice per session —
+  memoizing lazily, not at module load, also keeps every other webview test from needing the
+  global mocked just to import a module that transitively pulls this one in).
+  `postToHost()`/`onHostMessage()`. Imports `HostMessage`/`WebviewMessage` from
+  `../../src/shared/protocol.ts` directly — a relative cross-boundary import; confirmed to
+  resolve correctly through `tsc --noEmit`, `vite build`, and vitest's own vite-based transform
+  pipeline (not assumed from `PROTOCOL.md`'s prior claim that it would).
+- `extension/webview/src/camera-store.ts` (new): `useCameraStore()` hook — seeds from
+  `layout/restore`'s positions, updates optimistically on every drag/arrow-move, debounces
+  ~300ms before posting the full current (still sparse) map back as `layout/persist`. Replaces
+  `BlockCanvas.tsx`'s local `dragOverrides` `useState` with this hook; the existing, two-pass-
+  reviewed `onNodesChange` → position-commit logic itself is untouched, just now backed by a
+  hook that also persists.
+- `flow/layout.ts`: re-exports `Position` from `shared/protocol.ts` instead of declaring a
+  second, structurally-identical type. **Deliberately does not** scope dagre to
+  "ids absent from a positions map" the way its own pre-Task-8 comment predicted — dagre has
+  no notion of a pinned node to lay out around, so that was never actually implementable as
+  stated. Persisted/dragged positions are layered on top of dagre's unconditional full output
+  at the `BlockCanvas.tsx` level instead, extending the exact mechanism already proven for live
+  drag overrides rather than teaching dagre a pinning concept it doesn't have.
+- `ui/RiskPopover.tsx` + `.css` (new): oneLine/explain/fix + evidence file:line list for the
+  selected risk edge. "Risk badge click" is satisfied by clicking anywhere on a risky edge
+  (already wired, already accessible via the existing `onEdgeClick`/selection path), not a
+  second nested-interactive element on top of it — a second clickable badge inside an
+  already-interactive edge would be the identical nested-interactive-element anti-pattern
+  `BlockCard`'s `interactive` prop exists to avoid, just on an edge instead of a card. Fixed-
+  position overlay, not anchored to the edge's own screen coordinates (would need RF's
+  viewport-transform math for a purely cosmetic gain over a corner panel) — matches "lightweight
+  popover, not the full v2 inspector."
+- `App.tsx` rewritten: `?sample=1`/`?stress=1` now both bypass straight to `BlockCanvas` with a
+  static fixture and never call `host-bridge.ts` at all — load-bearing, not just preserved
+  convenience, since `acquireVsCodeApi()` doesn't exist in a plain browser and `LiveApp` would
+  throw on mount without this escape hatch, which is exactly the dev/QA visual-verification
+  path (`vite preview` + Playwright) this task still needed. Otherwise `LiveApp`: posts
+  `webview/ready` after subscribing, shows an inline "Analyzing…" (`analysis/progress`'s
+  phase/done/total once received) until `graph/macro` arrives, then renders `BlockCanvas` with
+  `layout/restore`'s positions as `initialPositions`.
+
+**The ready handshake.** VS Code drops any `postMessage` sent before the webview's own
+`window.addEventListener('message', ...)` has registered — no queue. Tracing `panel.ts`'s
+existing `createOrReveal()` found it reassigns `webview.html` **unconditionally on every call,
+including reveal of an already-'ready' panel showing identical content** — a pre-existing
+behavior, not something this task introduced, but one that means every single command
+invocation is a fresh navigation and a fresh listener-registration race, not just first
+construction. Without a real signal, `layout/restore` (which must precede `graph/macro` per
+`PROTOCOL.md`'s ordering guarantee) risked silently never arriving on a fast/cached analysis
+run. Fixed with a `webview/ready` handshake (`App.tsx` posts it first; `panel.ts`'s
+`whenReady()` gates every send on it) rather than trusting analysis's own wall-clock time to
+outlast script load, which is exactly the kind of timing assumption that holds in every manual
+test and then doesn't in production.
+
+**Deliberately not fixed, found while tracing the above, out of Task 8's stated scope:**
+`registerShowArchitectureCommand()` constructs a **new** `FileWatcher` on every command
+invocation (not just first open) and pushes it to `context.subscriptions` — re-running "Show
+Architecture" N times leaves N live watchers, each independently debouncing and forking a
+redundant analysis worker on every subsequent save. Not a correctness bug (`AnalysisRunner`'s
+shared generation counter still means only the latest result ever reaches the webview — see
+`FLOWS.md` §2a), just wasted process forks in a rare (repeat-invocation) path. Pre-existing
+since Task 6, unrelated to any of Task 8's three acceptance criteria, not touched here — flagged
+for a future task rather than silently expanding this one's diff.
+
+**`risks/update` is defined and sent but not consumed by the webview** — every risk the UI
+shows (`StatusBar`'s count, `RiskPopover`) already comes from `graph/macro`'s own `Edge.risk`,
+the identical `Risk` objects `risks/update` would otherwise duplicate. `App.tsx`'s message
+switch has an explicit no-op case for it (not a silent drop), and `PROTOCOL.md` documents this
+as deliberate — the natural home for a future dedicated risks-list view (`ROADMAP-V2.md`), not
+dead protocol.
+
+**`ui/EmptyState.tsx` was not built.** `panel.ts`'s no-workspace/multi-root bodies stay plain
+inline HTML with `enableScripts: false` — no script runs for either state, so there's nothing
+for a React component to buy there; converting them to a webview-rendered `EmptyState.tsx`
+would mean enabling scripts for a state whose entire point is not needing any. Earlier docs
+described this as deferred "to Task 8"; corrected to reflect it's simply not part of what this
+task's real acceptance criteria asked for.
+
+**Two-pass adversarial review (2026-07-21): run, findings triaged, all real findings fixed.**
+
+Doc-consistency pass (independent agent, read-only) found 4 real issues, all fixed: (1)
+`panel.ts`'s header comment still named a future `EmptyState.tsx` the project had already
+decided against building, and described it as "driven by protocol messages" — the opposite of
+the actual (and correct) `enableScripts: false` design; corrected. (2) `FLOWS.md`'s Flow 2
+described a `graph-store` module that has never existed — the real receive path is `App.tsx`'s
+`LiveApp`, which replaces its graph `useState` wholesale on every `graph/macro`, not a by-id
+diff-merge; corrected. (3) `LAYERS.md`'s mermaid diagram omitted `change-buffer.ts` from
+Layer 3 (present in the table) and grouped `watcher.ts` inside the vscode-free Layer 3 visually
+despite the table correctly calling it out as the one Layer-3 file that imports `vscode`
+("3b"); split into its own subgraph to match. (4) A pre-existing (Task 5) hedge-language
+violation in `FLOWS.md` ("may or may not... an open question, not decided here" about
+`changedFiles`) — `docs/architecture/` permanent docs may never carry undecided language per
+`CLAUDE.md`; corrected to state the current fact (still unread) and note that wiring it isn't
+tracked planned work, not a standing open question.
+
+Architectural-soundness pass (a separate, independently-dispatched agent, read-only) found 6
+findings, ranked; all fixed except one accepted-as-is with its reasoning corrected:
+
+1. **CONFIRMED, high severity: a real re-entrancy race in the ready handshake.** Traced
+   independently: `whenReady()` matched on message *type* alone, with no way to distinguish a
+   `webview/ready` from a script instance a *later* `createOrReveal()` call had already
+   superseded (every call reassigns `webview.html` unconditionally, even reveal-of-already-
+   ready). A rapid double-invocation (e.g. a doubled keybinding) could resolve an *earlier*
+   `whenReady()` call on a *stale* ready, posting `layout/restore`/`graph/macro` into a webview
+   VS Code had already torn down — silently dropped, no queue, no error. **Fixed**:
+   `webview/ready` now carries a `generation` id (`shared/protocol.ts`), minted fresh on every
+   `webview.html` (re)assignment (`panel.ts`'s `#currentGeneration`, injected via a new
+   `<meta name="blocknet-generation">` tag — `webview-html.ts`) and echoed back by `App.tsx`.
+   `whenReady()` only resolves on a matching generation, and `show-architecture.ts` re-checks
+   `isCurrentGeneration()` *after* it resolves (matching inside `whenReady()` alone isn't
+   sufficient — see `panel.ts`'s own comment for why).
+2. **CONFIRMED, disputed severity: `FileWatcher` accumulates unboundedly, not just "rare and
+   harmless."** The original write-up called this a rare-path inefficiency; the review
+   correctly pushed back — re-invoking "Show Architecture" is a normal action (the panel is a
+   singleton; re-invoking while open is just a reveal), so N invocations left N live watchers
+   forking N redundant analyses per save, permanently, for the session. Independently verified
+   `AnalysisRunner`'s generation counter still guarantees correctness (only the true-latest
+   result ever reaches the webview) — so not a correctness bug — but real, unbounded resource
+   waste on a genuinely ordinary action, not a rare one. **Fixed**: watcher construction is now
+   idempotent per root dir, reusing the same watcher across reveals.
+3. **CONFIRMED (empirically, via a real `tsc` repro): no exhaustiveness check on `App.tsx`'s
+   `HostMessage` switch** — a 5th `HostMessage` variant would compile clean and silently drop
+   at runtime despite the "explicit no-op case, not a silent drop" reasoning claiming otherwise.
+   **Fixed**: added a `default: { const exhaustive: never = message; }` guard.
+4. **CONFIRMED, overstatement: `state.ts`'s comment claimed replace-not-merge "can't lose a
+   concurrent write"** — false in general (two windows on the same workspace would each hold
+   an independent camera-store snapshot; whichever persists last clobbers keys it never had).
+   True *only* because v1 is single-workspace-root, single-window (VS Code focuses an existing
+   window rather than opening a duplicate). **Fixed**: comment corrected to state the actual,
+   narrower guarantee instead of a false general one; behavior unchanged (correct for v1).
+5. **CONFIRMED, dev-only: React 18 StrictMode double-invokes `camera-store.ts`'s mount effect**,
+   causing one wasted no-op `layout/persist` on mount in dev builds only (production strips
+   StrictMode's double-invoke). Documented, not fixed — no data loss, dev-only.
+6. **CONFIRMED, real: a pending debounced persist was silently dropped (not flushed) on
+   unmount** — up to 300ms of the most recent drag could be lost if `camera-store`'s hook
+   unmounted (a live `graph/macro` swap, or the panel closing) mid-debounce. **Fixed**: a
+   separate mount-once effect now flushes any pending persist immediately in its cleanup,
+   verified via two new regression tests (`camera-store.test.tsx`).
+
+Both passes' claims that held up under scrutiny, stated plainly rather than assumed: the
+generation-counter correctness argument for redundant analyses; the `webview/ready` handshake
+being genuinely load-bearing (verified via `useState(initialPositions)` seeding — a late
+`layout/restore` after `graph/macro` would be silently ignored); the ordering guarantee holding
+even though the file watcher's `triggerAnalysis` path isn't itself gated on `whenReady()` (a
+subtle, now explicitly-commented invariant: any watcher-triggered analysis either resolves
+before the webview is ready, in which case its `graph/macro` is dropped, or after, in which
+case a newer generation already exists and `isLatest()` discards it).
+
+**Live interactive verification (2026-07-21) found more, and more severe, bugs than either
+review pass — real-browser testing (Playwright against a running `vite dev` server, plus the
+user driving the same dev server directly in their own browser) is not optional for this class
+of change, confirmed empirically, not just asserted:**
+
+1. **CONFIRMED, real: `camera-store.ts` threw an uncaught exception on every drag when no real
+   VS Code host exists.** `App.tsx`'s `?sample=1`/`?stress=1` dev/QA fixture bypass renders the
+   *same* `BlockCanvas` tree as the live path, including `camera-store`'s debounced persist —
+   which unconditionally called `acquireVsCodeApi()` (nonexistent outside a real webview) ~300ms
+   after every drag. Found via a real Playwright mouse-drag against the dev server, not by
+   reading the code. **Fixed**: `host-bridge.ts`'s `getApi()` now falls back to a no-op when no
+   real host is present, with a regression test. Also added a friendly `App.tsx` fallback
+   message (instead of a silent crash-to-black-screen) for the base URL with no fixture param
+   and no real host.
+2. **CONFIRMED, severe, real: dragging desynced from the pointer and eventually broke
+   entirely** — React Flow's own "trying to drag a node that is not initialized" warning
+   (error #015) firing repeatedly under sustained real dragging, visually confirmed by the user
+   ("everything goes black and disappears") and reproduced directly via a ~250-move Playwright
+   drag. Root cause (confirmed by reading `@xyflow/react`'s own `applyNodeChanges` source, not
+   assumed): the hand-rolled position-patch in `onNodesChange` rebuilt *every* node's object
+   identity on *every* drag frame (not just the dragged one) and never set the `dragging` flag
+   RF's controlled-mode contract expects — racing RF's own internal node-registration effect.
+   The race was fast-timing-dependent: with browser DevTools open (which slows JS execution)
+   it did not reproduce, which is exactly the signature of a race, not a deterministic bug, and
+   is why neither review pass caught it (both were static/read-only, not exercising rendering
+   under load). **Fixed** in two stages: first split `flowNodes` so unrelated nodes keep stable
+   object identity across a drag (reduced severity, confirmed live — the smaller "tiny flicker"
+   variant of the same bug was still present); then rewrote the drag path to use React Flow's
+   own `applyNodeChanges` utility end to end (the officially documented controlled-mode
+   pattern), which correctly threads through `dragging`/`measured` instead of hand-rolling
+   position-only patching. Verified via a new `BlockCanvas.test.tsx` regression test (a live
+   `nodes`/`edges` prop update preserves a dragged position) and a repeated real sustained-drag
+   Playwright pass showing zero #015 warnings.
+3. **CONFIRMED, real: `RiskPopover` was visually clipped/covered by `StatusBar`.**
+   `StatusBar.css` is a fixed top strip (`top:0`, `height:54px`, `z-index:20`); `RiskPopover`
+   started at `top:16px`, `z-index:15` (`10` originally) — its header and close button sat
+   partially underneath the status bar. Found by the user actually opening the popover, not by
+   either review pass (a purely visual/layout defect, invisible to static code review).
+   **Fixed**: repositioned below the status bar (`top:70px`).
+4. **CONFIRMED, real: risk edges were unreliably clickable.** SVG has no z-index — paint (and
+   hit-test) order is DOM order, so a risk edge earlier in the array could be visually and
+   interactively buried under a later non-risk edge crossing the same point, especially
+   pronounced on the 100-edge stress fixture. Found via the user directly struggling to click a
+   risk connection. **Fixed**: risk edges now render last (stable sort — only risk-vs-non-risk
+   relative order changes) and get a wider `interactionWidth` (32px vs 20px). Verified via a
+   Playwright pass clicking 8 different risk edges at their geometric midpoint (not the visual
+   badge): 8/8 opened the popover, versus real, reproducible misses before the fix.
+
+**Explicitly considered and declined, at the user's direction**: extending the click popover to
+*all* edges (not just risk ones), showing full connection detail with code — this is
+`ROADMAP-V2.md`'s already-tracked "Connection Inspector" (v2.1), deliberately out of v1 scope;
+confirmed with the user rather than silently built or silently skipped. Also raised: dedicated
+edge-routing (draggable bend points) for large/messy graphs — noted as a future idea, not
+scoped or built this task; not yet added to `ROADMAP-V2.md`, worth doing before it's forgotten.
+
+**Verification actually performed:** `sh .githooks/pre-push` green across all three
+workspaces after every fix above — core 267/267 (unchanged, 27 files), extension 31/31
+(5 files), webview 63/63 (10 files), build/typecheck/lint clean. Real interactive verification:
+sustained real-mouse Playwright drags (both short and ~250-300-move/4s sustained) against a
+live `vite dev` server showing zero React Flow warnings and correct pointer tracking; 8/8
+targeted risk-edge clicks along the actual curve (not just the badge) opening the popover;
+Escape/close-button/pane-click dismissal all verified working in a real Chromium instance (not
+just jsdom's `fireEvent`, which cannot catch real-focus-dependent bugs — see the Escape-key fix
+below); the user independently drove the same dev server live throughout and confirmed the
+fixes. One more real, live-only bug found this way: `RiskPopover`'s Escape-to-close handler was
+on an unfocused `<div>` — real keydown events bubble from whatever element currently has
+focus, not into unfocused descendants, so it silently never fired in a real browser despite
+`RiskPopover.test.tsx`'s jsdom `fireEvent.keyDown` (which dispatches directly on the target
+regardless of focus) passing throughout. **Fixed**: the dialog now takes focus on mount
+(`tabIndex={-1}` + a mount effect), the standard WAI-ARIA dialog pattern, not just a fix for
+this one bug. **Not yet performed**: a real F5 extension-development-host manual run for
+Tasks 6–8 together — this environment still has no VS Code CLI/GUI. Everything above was
+verified via `vite dev`/Playwright/direct user testing in a real browser, which is a real but
+partial substitute — F5 is still the only way to verify the actual `postMessage` wiring against
+a real `vscode.Webview`, the real ready-handshake timing, and real `workspaceState` persistence
+end to end.
+
+### Task 9 — Native delegation: split-screen open, dirty markers ✅ (2026-07-21)
+
+**What got built**, per TASKS-V1.md's acceptance criteria (evidence link opens the file at the
+exact import line; dirty blocks show the amber marker):
+
+- `extension/src/dirty-blocks.ts` (new): pure `dirtyBlockIds(blocks, dirtyFiles)` —
+  path-prefix aggregation (`dirtyFile === block.path || dirtyFile.startsWith(block.path +
+  '/')`), a directory-boundary check so `apps/web` doesn't falsely match a sibling
+  `apps/web-utils/foo.ts`. Split into its own vscode-free file specifically so this,
+  the actual bug-prone logic, stays unit-tested (`extension/test/dirty-blocks.test.ts`, 7
+  tests) even though `git.ts` (below) can't be — vitest has no `vscode` mock, and every other
+  file importing `vscode` directly in this repo (`watcher.ts`, `panel.ts`,
+  `show-architecture.ts`) already has zero unit tests for the same reason.
+- `extension/src/git.ts` (new): `getDirtyFiles(rootDir)` — resolves the built-in `vscode.git`
+  extension via a narrow structural type (`@types/vscode` doesn't ship the git extension's
+  own API surface), reads `workingTreeChanges` + `indexChanges` across every repository it
+  knows about, converts each to a POSIX-relative path, degrades to `[]` on any failure (no
+  extension, no repo, activation error) — `ENGINEERING-CONSTRAINTS.md`'s "no git" degrade
+  state, never a crash or a spurious "analysis failed" toast.
+- `extension/src/commands/open-file.ts` (new): `handleOpenFile(rootDir, fileId, line?)` —
+  validates `fileId` stays within `rootDir` once resolved (a postMessage boundary crossing,
+  CLAUDE.md's "validate at system boundaries"), converts `Evidence.line`'s 1-indexed
+  convention to `vscode.Position`'s 0-indexed one, calls `showTextDocument(uri, {viewColumn:
+  Beside, selection})`. Catches a since-deleted/renamed file's rejection into a toast rather
+  than an unhandled promise rejection.
+- `extension/src/shared/protocol.ts`: added `WebviewBlockNode = BlockNode & { dirty: boolean
+  }`, used only for `graph/macro`'s `nodes` — core's own `BlockNode` (frozen at Checkpoint B)
+  is deliberately untouched, since dirty state is an extension-host-only concern
+  (`STATE-OWNERSHIP.md`) core's analysis engine has no business knowing about.
+- `extension/src/commands/show-architecture.ts`: `triggerAnalysis` now awaits
+  `getDirtyFiles(rootDir)` and maps `dirtyBlockIds(...)` onto every block before posting
+  `graph/macro` — re-checks `runner.isLatest(generation)` a second time after that await
+  (not just before it), closing a real gap: a newer analysis run could complete and become
+  the latest during the await window, and without the second check its dirty-augmented nodes
+  would still get posted into a panel a fresher run had already superseded. `createOrReveal`
+  gained an `onOpenFile` callback (mirroring the existing `onLayoutPersist` pattern), wired to
+  `handleOpenFile`; the two degrade states (`no-workspace`/`multi-root`) get a `noopOnOpenFile`
+  since no script ever runs there to send it.
+- `extension/src/panel.ts`: constructor/`createOrReveal` take `onOpenFile`; message dispatch
+  gained an `open/file` case alongside the existing `layout/persist` one.
+- `extension/webview/src/flow/BlockCard.tsx` + `.css`: `dirty` prop renders a `● edited`
+  marker (amber, `--bn-dirty` token mapped to `--vscode-gitDecoration-modifiedResourceForeground`
+  so it visually matches VS Code's own git-modified color) next to the block name, before the
+  risk pill.
+  `extension/webview/src/flow/block-label.ts`'s `blockAriaLabel` gained an optional `dirty`
+  param so the accessible name also announces "uncommitted changes."
+- `extension/webview/src/ui/RiskPopover.tsx` + `.css`: evidence `file:line` entries are now a
+  real `<button>` (was a `<span>`) posting `open/file` with the evidence's `file`/`line` on
+  click — keyboard-operable natively, not a synthetic click handler on a non-interactive
+  element.
+- `extension/webview/src/flow/BlockCanvas.tsx`, `App.tsx`, both fixtures
+  (`sample-graph.ts`/`stress-graph.ts`): threaded `WebviewBlockNode`/`dirty` through instead of
+  plain `BlockNode` from `@blocknet/core`.
+
+**Scope correction, agreed with Krish mid-task:** TASKS-V1.md's original Task 9 also specified
+a block-card ⤢ triggering the same `open/file` flow. Checked directly against the design-
+handoff prototype (`BlockNet.dc.html`) before building it: the ⤢ affordance only ever exists
+on `microNodes` (per-file cards, the v2.0 micro view), never on `macroNodes` (blocks) — and
+`BlockNode.path` is always a directory (`core/src/blocks/detect.ts`), never a single file, so
+there's no canonical file for a block-level ⤢ (or the `open/diff` it would trigger) to target
+without a drill-down step v1 doesn't have. Dropped from v1, deferred to
+`ROADMAP-V2.md`'s already-existing v2.0 micro view entry (block/file ⤢ + `● edited` at file
+granularity was already planned there). `open/diff` stays defined in the protocol,
+unimplemented on both sides, for the same reason — no v1 UI trigger.
+
+**Known, accepted limitation, not swept under the rug:** the synthetic `'(root)'` catch-all
+block (files matching no detected block, `core/src/edges/resolve-block.ts`'s `ROOT_BLOCK_ID`,
+not exported from core's public barrel) never shows a dirty marker even if a loose top-level
+file is dirty — `dirty-blocks.ts`'s path-prefix match has no way to reach it without
+duplicating core's own block-resolution cascade in the extension layer, a real drift risk for
+a cosmetic marker. Not attempted for v1.
+
+**Two-pass adversarial review + live verification, scoped to the whole repo (not just this
+diff), per Krish's explicit request — both lanes' findings independently re-verified by
+reading/grepping the actual files before fixing, not trusted as reported (one review round
+hit a session-limit error and had to be resumed; both eventually completed).**
+
+- **Doc-consistency lane — found the exact bookkeeping gap this entry itself is fixing**: this
+  file's status table still said "Tasks 8-9 not started" despite a full Task 8 entry existing;
+  a stale "None of the three exist yet" line for `state.ts`/`git.ts`/`open-file.ts`;
+  `TASKS-V1.md`'s Task 9 header still said "(in progress)" with two of three acceptance boxes
+  unchecked, even though both were actually done (I'd written those checkboxes early, before
+  building the features, and never returned to flip them — a real gap in my own process, not
+  the reviewer's error); root `README.md`/`CONTRIBUTING.md` still described a pre-Checkpoint-A,
+  pre-`extension/` repo. All four fixed directly in this round.
+- **Architectural-soundness lane — two real bugs, both fixed:**
+  1. `commands/show-architecture.ts`'s `triggerAnalysis` gated every `panel.post()`
+     (`analysis/progress`, `graph/macro`, `risks/update`) solely on `runner.isLatest()` (the
+     *analysis* generation), never on `panel.isCurrentGeneration()` (the *panel* generation) —
+     even though the identical race class was already found and fixed at the command-kickoff
+     call site (`panel.ts`'s own comments describe it in detail). Traced concretely: a rapid
+     re-invocation of the command reassigns `webview.html` (a new panel generation) while a
+     prior analysis is still in flight; if that analysis completes before the new script sends
+     its own `webview/ready`, the stale run's `graph/macro` could still post into the live
+     panel out of order with `layout/restore`, breaking `PROTOCOL.md`'s stated ordering
+     guarantee for that session. Fixed: `triggerAnalysis` now captures `panel.currentGeneration`
+     once at call time and re-checks `panel.isCurrentGeneration()` immediately before every
+     `panel.post()` (progress, graph/macro, risks/update alike) — error toasts are deliberately
+     NOT gated on it, since `showErrorMessage` is a global notification, not a postMessage that
+     can be silently dropped by a torn-down webview script.
+  2. `git.ts` and `commands/open-file.ts` each reimplemented `core/src/path-utils.ts`'s
+     `isWithinRoot()` path-containment check inline instead of importing it from
+     `@blocknet/core/path-utils` — the exact subpath `change-buffer.ts` already imports
+     `isExcludedPath` from, proving the import path works. Harmless today (the duplicated logic
+     was correct), but a real, verifiable violation of `path-utils.ts`'s own stated reason for
+     existing ("a path-escape bug fixed once... can't silently reappear, unguarded, in a
+     sibling module"). Fixed: both now import `isWithinRoot` directly.
+  3. Checked and ruled out: the async `getDirtyFiles()` await race (the *analysis*-generation
+     re-check after the await is correct, already in place before this review), the
+     ready-handshake generation-nonce mechanism, layer-boundary violations (`core` has zero
+     `vscode` imports, confirmed via the passing `no-vscode-import.test.ts` plus a matching
+     ESLint rule), `dirty-blocks.ts`'s duplication of `resolve-block.ts`'s prefix-match logic
+     (defensible — `resolveBlock` isn't exported from core's public barrel, so there's no legal
+     import path, unlike `isWithinRoot`), and core's Tarjan SCC / boundary-check / cache
+     algorithms (all read and traced correct against their own documented rationale).
+
+Live-verified via Playwright against a real `vite dev` server on `?sample=1`: the dirty marker
+renders on exactly the fixture block flagged `dirty: true` and no others (screenshot-confirmed),
+and clicking an evidence entry does not throw in the dev/QA fixture bypass (`host-bridge.ts`'s
+no-op `postToHost` fallback, since `acquireVsCodeApi` doesn't exist outside a real webview) —
+`RiskPopover.test.tsx`'s own unit test additionally asserts the exact `{type: 'open/file',
+fileId, line}` payload against a mocked `postMessage`, which the fixture-mode live check can't.
+Full `sh .githooks/pre-push` re-run green after all fixes: core 267/267, extension 38/38,
+webview 68/68. **Not yet performed:** a real F5 extension-development-host run (same standing
+gap as Tasks 6–8 — no VS Code CLI/GUI in this building environment) to verify the actual
+`vscode.git` extension integration and `showTextDocument` call against a real workspace; a
+third review round on the two architectural fixes themselves (the two-pass-review skill's own
+rule is to loop back after a nontrivial fix) — not run, because the architectural-soundness
+lane hit this account's monthly spend cap partway through this round and a further round was
+judged not worth risking against the same limit. The two fixes were independently re-verified
+by reading the actual code before applying them, not applied on the reviewer's word alone.
 
 ## Deferred by design (not gaps)
 
-- `state.ts`, `git.ts`, `commands/open-file.ts`, live `postMessage` wiring on the webview
-  side (`vscode-api.ts`, a `graph-store.ts`-shaped read-only mirror), `ui/ProgressBar.tsx`,
-  `ui/RiskPopover.tsx`, `ui/EmptyState.tsx` — Tasks 8–9, not Task 7; see Task 7's entry above
-  for exactly what stands in for each in the meantime (static fixtures via `App.tsx`, the
-  inline no-workspace/multi-root bodies already in `panel.ts` since Task 6).
+- `git.ts`, `commands/open-file.ts`, `ui/EmptyState.tsx` (see Task 8's entry above for why the
+  latter isn't actually needed, not just postponed) — Task 9. `open/file`/`open/diff` are
+  defined in `shared/protocol.ts` but unimplemented on both sides; no UI element in the webview
+  sends them yet.
 
 ## Tracked risks
 
