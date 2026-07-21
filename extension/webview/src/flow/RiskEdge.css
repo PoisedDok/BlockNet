@@ -1,0 +1,63 @@
+@keyframes bn-flow {
+  to {
+    stroke-dashoffset: -32;
+  }
+}
+
+@keyframes bn-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.bn-edge {
+  transition: opacity 0.2s ease;
+}
+
+.bn-edge-line {
+  stroke: var(--bn-text-primary);
+  stroke-width: 1.5px;
+  stroke-dasharray: 2 6;
+  stroke-linecap: round;
+  animation: bn-flow 1s linear infinite;
+}
+
+.bn-edge[data-selected] .bn-edge-line {
+  stroke-width: 2.6px;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--bn-text-primary) 50%, transparent));
+}
+
+.bn-edge[data-risk] .bn-edge-line {
+  stroke: var(--bn-risk);
+  stroke-width: 1.9px;
+  stroke-dasharray: none;
+  animation: bn-pulse 1.7s ease-in-out infinite;
+}
+
+.bn-edge[data-risk][data-selected] .bn-edge-line {
+  stroke-width: 2.8px;
+  filter: drop-shadow(0 0 7px var(--bn-risk-glow));
+}
+
+.bn-edge-port {
+  fill: var(--bn-text-primary);
+}
+
+.bn-edge[data-risk] .bn-edge-port {
+  fill: var(--bn-risk);
+}
+
+.bn-edge-badge-circle {
+  fill: color-mix(in srgb, var(--bn-risk) 12%, var(--bn-canvas-bg) 88%);
+  stroke: var(--bn-risk);
+  stroke-width: 1.4px;
+}
+
+.bn-edge-badge-text {
+  fill: var(--bn-risk);
+  font: 700 12px var(--bn-font-mono);
+}

@@ -1,0 +1,59 @@
+/* Design tokens (docs/planning/TASKS-V1.md's "Design Tokens", sourced from
+ * design_handoff_blocknet_extension/README.md) reimplemented as semantic custom properties
+ * that resolve through var(--vscode-*) first (docs/architecture/ENGINEERING-CONSTRAINTS.md:
+ * "Design tokens map onto var(--vscode-*)"), so BlockNet's palette genuinely follows the
+ * host's actual light/dark/high-contrast theme instead of forcing the prototype's fixed dark
+ * look everywhere. The literal fallback values ARE the prototype's dark palette — they only
+ * apply when no VS Code theme is present (this file's own vitest/browser dev harness), so the
+ * unstyled state is still faithful to the design reference.
+ *
+ * VS Code stamps body.vscode-light / body.vscode-dark / body.vscode-high-contrast (and
+ * body.vscode-high-contrast-light for the light HC variant) — verified against VS Code's own
+ * webview API docs, not assumed.
+ */
+
+:root {
+  --bn-canvas-bg: var(--vscode-editor-background, #08080a);
+  --bn-grid-dot: var(--vscode-editorLineNumber-foreground, #17171c);
+
+  --bn-card-bg: var(--vscode-editorWidget-background, #131318);
+  --bn-card-bg-top: color-mix(in srgb, var(--bn-card-bg) 100%, white 5%);
+  --bn-card-bg-bottom: color-mix(in srgb, var(--bn-card-bg) 100%, black 6%);
+
+  --bn-border: var(--vscode-widget-border, var(--vscode-editorWidget-border, #26262b));
+  --bn-border-selected: var(--vscode-focusBorder, #5b5b66);
+  --bn-border-referenced: color-mix(in srgb, var(--bn-text-primary) 45%, transparent);
+
+  --bn-text-primary: var(--vscode-editor-foreground, #f4f4f5);
+  --bn-text-body: var(--vscode-foreground, #d4d4d8);
+  --bn-text-muted: var(--vscode-descriptionForeground, #a1a1aa);
+  --bn-text-faint: var(--vscode-disabledForeground, #71717a);
+
+  --bn-pill-bg: color-mix(in srgb, var(--bn-canvas-bg) 100%, var(--bn-text-primary) 6%);
+
+  --bn-risk: var(--vscode-errorForeground, #ef4444);
+  --bn-risk-strong: var(--vscode-editorError-foreground, #f87171);
+  --bn-risk-border: color-mix(in srgb, var(--bn-risk) 40%, transparent);
+  --bn-risk-soft: color-mix(in srgb, var(--bn-risk) 10%, transparent);
+  --bn-risk-glow: color-mix(in srgb, var(--bn-risk) 60%, transparent);
+
+  --bn-shadow-card: 0 10px 26px rgba(0, 0, 0, 0.4);
+  --bn-shadow-card-selected: 0 0 0 1px var(--bn-border-selected), 0 16px 40px rgba(0, 0, 0, 0.55);
+
+  --bn-radius-card: 13px;
+  --bn-radius-control: 7px;
+  --bn-radius-chip: 20px;
+
+  --bn-font-ui: 'Space Grotesk', var(--vscode-font-family), system-ui, sans-serif;
+  --bn-font-mono: 'JetBrains Mono', var(--vscode-editor-font-family), ui-monospace, monospace;
+}
+
+/* High-contrast themes: VS Code's own --vscode-* values already carry stronger contrast, but
+ * a card whose only affordance is a soft box-shadow is exactly the failure WCAG 1.4.11 (non-
+ * text contrast) exists for — force a visible border unconditionally rather than trust an
+ * inherited value that might resolve to something too close to the background. */
+body.vscode-high-contrast,
+body.vscode-high-contrast-light {
+  --bn-border: var(--vscode-contrastBorder, CanvasText);
+  --bn-shadow-card: none;
+}

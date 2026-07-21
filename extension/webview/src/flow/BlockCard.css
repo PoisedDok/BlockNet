@@ -1,0 +1,105 @@
+.bn-card {
+  width: 236px;
+  padding: 14px 16px;
+  background: linear-gradient(180deg, var(--bn-card-bg-top), var(--bn-card-bg-bottom));
+  border: 1px solid var(--bn-border);
+  border-radius: var(--bn-radius-card);
+  box-shadow: var(--bn-shadow-card);
+  cursor: pointer;
+  transition:
+    opacity 0.28s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.bn-card[data-risk] {
+  border-color: var(--bn-risk-border);
+}
+
+.bn-card[data-selected] {
+  border-color: var(--bn-border-selected);
+  box-shadow: var(--bn-shadow-card-selected);
+}
+
+.bn-card:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, var(--bn-border-selected));
+  outline-offset: 2px;
+}
+
+.bn-card-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.bn-card-dot {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 3px;
+  background: var(--bn-text-primary);
+}
+
+.bn-card[data-risk] .bn-card-dot {
+  background: var(--bn-risk);
+  box-shadow: 0 0 8px var(--bn-risk-glow);
+}
+
+.bn-card-name {
+  font: 600 14.5px var(--bn-font-ui);
+  color: var(--bn-text-primary);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bn-card-risk-pill {
+  margin-left: auto;
+  font: 600 10px var(--bn-font-mono);
+  color: var(--bn-risk-strong);
+  background: var(--bn-risk-soft);
+  border: 1px solid var(--bn-risk-border);
+  padding: 2px 6px;
+  border-radius: 5px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.bn-card-meta {
+  margin-top: 7px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font: 11px var(--bn-font-mono);
+  color: var(--bn-text-faint);
+}
+
+.bn-card-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.bn-card-connections {
+  flex: none;
+  margin-left: auto;
+  color: var(--bn-text-muted);
+}
+
+.bn-card-pills {
+  margin-top: 13px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.bn-pill {
+  font: 10px var(--bn-font-mono);
+  color: var(--bn-text-muted);
+  background: var(--bn-pill-bg);
+  border: 1px solid var(--bn-border);
+  padding: 3px 8px;
+  border-radius: var(--bn-radius-chip);
+}

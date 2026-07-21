@@ -1,0 +1,68 @@
+.bn-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bn-card-bg);
+  border: 1px solid var(--bn-border);
+  border-radius: 9px;
+  padding: 3px;
+}
+
+.bn-zoom-btn {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--bn-text-muted);
+  font-size: 18px;
+  line-height: 1;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.bn-zoom-btn:hover {
+  background: var(--bn-pill-bg);
+  color: var(--bn-text-primary);
+}
+
+.bn-zoom-btn:focus-visible,
+.bn-zoom-reset:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, var(--bn-border-selected));
+  outline-offset: -2px;
+}
+
+.bn-zoom-pct {
+  min-width: 46px;
+  text-align: center;
+  font: 11px var(--bn-font-mono);
+  color: var(--bn-text-faint);
+}
+
+.bn-zoom-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--bn-border);
+  margin: 0 3px;
+}
+
+.bn-zoom-reset {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  color: var(--bn-text-muted);
+  font: 11px var(--bn-font-mono);
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.bn-zoom-reset:hover {
+  background: var(--bn-pill-bg);
+  color: var(--bn-text-primary);
+}
