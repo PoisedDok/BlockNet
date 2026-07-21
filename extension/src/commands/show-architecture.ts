@@ -47,11 +47,11 @@ export function registerShowArchitectureCommand(context: vscode.ExtensionContext
     const folders = vscode.workspace.workspaceFolders;
 
     if (folders === undefined || folders.length === 0) {
-      ArchitecturePanel.createOrReveal('no-workspace');
+      ArchitecturePanel.createOrReveal('no-workspace', context.extensionUri);
       return;
     }
     if (folders.length > 1) {
-      ArchitecturePanel.createOrReveal('multi-root');
+      ArchitecturePanel.createOrReveal('multi-root', context.extensionUri);
       return;
     }
 
@@ -62,7 +62,7 @@ export function registerShowArchitectureCommand(context: vscode.ExtensionContext
     }
     const rootDir = workspaceFolder.uri.fsPath;
     const cacheDir = resolveCacheDir(context);
-    const panel = ArchitecturePanel.createOrReveal('ready');
+    const panel = ArchitecturePanel.createOrReveal('ready', context.extensionUri);
 
     triggerAnalysis(runner, panel, { rootDir, cacheDir });
 
