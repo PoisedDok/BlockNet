@@ -52,6 +52,13 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Defensive, same fix as FileCard.css's identical pattern (see its own comment for the real,
+   * live-verified bug this closes there: overflow:hidden on a flex item with no min-width
+   * shrinks to 0 — invisible, not just truncated — under enough sibling pressure). Not yet
+   * reproduced here (block names/dirty markers/risk pills fit v1's real-repo fixtures so far),
+   * but it's the same row shape and the same latent failure mode, so it gets the same fix
+   * before a long real block name + risk pill combination finds it in production. */
+  min-width: 44px;
 }
 
 .bn-card-dirty {
