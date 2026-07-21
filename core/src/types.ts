@@ -84,3 +84,29 @@ export type CacheManifest = {
   configHash: string;
   files: Record<string, { hash: string }>;
 };
+
+// v2.0 micro view (docs/planning/ROADMAP-V2.md) — a single block's file-level graph, computed
+// on demand from the cached macro run's fileEdges (analyze-micro.ts), never re-run through
+// dependency-cruiser. `id`/`path` are rootDir-relative POSIX paths, the same convention as
+// `Evidence.file`/`FileEdge.sourceFile` — the existing `open/file` flow already trusts this
+// shape unchanged (extension/src/commands/open-file.ts).
+export type MicroFileNode = {
+  id: string;
+  name: string;
+  path: string;
+  loc: number;
+  risk: boolean;
+};
+
+export type MicroFileEdge = {
+  id: string;
+  source: string;
+  target: string;
+  risk: boolean;
+};
+
+export type MicroGraphResult = {
+  blockId: string;
+  files: MicroFileNode[];
+  edges: MicroFileEdge[];
+};

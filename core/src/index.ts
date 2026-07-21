@@ -9,6 +9,8 @@
 // empirically while wiring Task 6, not a theoretical concern. path-utils.ts itself has zero
 // imports, so its own dedicated export stays fully decoupled from that problem.
 export { analyze } from './analyze.js';
+export { analyzeMicroBlock } from './analyze-micro.js';
+export type { AnalyzeMicroOptions } from './analyze-micro.js';
 export type {
   AnalysisMeta,
   AnalyzeOptions,
@@ -18,10 +20,13 @@ export type {
   Evidence,
   FileEdge,
   GraphResult,
+  MicroFileEdge,
+  MicroFileNode,
+  MicroGraphResult,
   Progress,
   Risk,
 } from './types.js';
 // The forked-worker IPC contract (docs/architecture/PROCESS-BOUNDARY.md) — extension/src/
 // analysis-runner.ts imports these types from here, never from ipc-worker.ts's own path
 // directly, keeping this barrel the one place any consumer imports core's public surface.
-export type { WorkerMessage, WorkerRequest } from './ipc-worker.js';
+export type { MacroWorkerRequest, MicroWorkerRequest, WorkerMessage, WorkerRequest } from './ipc-worker.js';
