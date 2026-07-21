@@ -53,6 +53,11 @@ export type CacheManifest = { version: number; configHash: string;
 
 - `Risk.evidence` carries the actual import statement + location so a future connection
   inspector can consume it unchanged — designed forward on purpose, not speculative scope.
+- `graph/macro`'s `nodes` are `WebviewBlockNode` (`shared/protocol.ts`: `BlockNode & { dirty:
+  boolean }`), not this file's `BlockNode` directly — dirty-file state is an extension-host-only
+  concern (`STATE-OWNERSHIP.md`, Task 9) computed fresh from the git API on every push, never
+  something core emits or knows about. This is a protocol-layer augmentation, not a change to
+  core's frozen Checkpoint-B schema — see `PROTOCOL.md`.
 - `AnalysisMeta.cacheHit` is what lets the webview distinguish "cold scan just finished" from
   "warm reload" without a separate message type.
 - `CacheManifest.configHash` is the single field `cache/invalidate.ts` checks to decide
