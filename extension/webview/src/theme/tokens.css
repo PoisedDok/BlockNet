@@ -37,6 +37,11 @@
   --bn-risk-soft: color-mix(in srgb, var(--bn-risk) 10%, transparent);
   --bn-risk-glow: color-mix(in srgb, var(--bn-risk) 60%, transparent);
 
+  /* Same amber VS Code itself uses for a modified file's Explorer/SCM decoration — a dirty
+   * BlockNet block marker should read as "the same kind of amber," not a color BlockNet
+   * invented, so a user's existing git-dirty association transfers immediately. */
+  --bn-dirty: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
+
   --bn-shadow-card: 0 10px 26px rgba(0, 0, 0, 0.4);
   --bn-shadow-card-selected: 0 0 0 1px var(--bn-border-selected), 0 16px 40px rgba(0, 0, 0, 0.55);
 
