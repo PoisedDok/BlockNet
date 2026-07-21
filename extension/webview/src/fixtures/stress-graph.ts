@@ -1,4 +1,5 @@
-import type { BlockNode, Edge, Risk } from '@blocknet/core';
+import type { Edge, Risk } from '@blocknet/core';
+import type { WebviewBlockNode } from '../../../src/shared/protocol.js';
 
 // Synthetic 30-block/100-edge fixture — Task 7's stated scale target for pan/zoom/drag/select
 // smoothness (docs/planning/TASKS-V1.md). Generated, not hand-authored: real repos this size
@@ -18,13 +19,14 @@ const risk: Risk = {
   evidence: [],
 };
 
-export const stressNodes: BlockNode[] = Array.from({ length: BLOCK_COUNT }, (_, i) => ({
+export const stressNodes: WebviewBlockNode[] = Array.from({ length: BLOCK_COUNT }, (_, i) => ({
   id: `block-${i}`,
   name: `block-${i}`,
   path: `packages/block-${i}`,
   pills: i % 3 === 0 ? ['typescript', 'react'] : ['typescript'],
   fileCount: (i % 9) + 1,
   riskCount: i % 7 === 0 ? 1 : 0,
+  dirty: i % 5 === 0,
 }));
 
 export const stressEdges: Edge[] = Array.from({ length: EDGE_COUNT }, (_, i) => {

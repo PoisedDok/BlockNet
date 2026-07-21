@@ -1,4 +1,5 @@
-import type { BlockNode, Edge, Risk } from '@blocknet/core';
+import type { Edge, Risk } from '@blocknet/core';
+import type { WebviewBlockNode } from '../../../src/shared/protocol.js';
 
 // Static fixture data for Task 7 (docs/planning/TASKS-V1.md) — live graph.macro/risks.update
 // data replaces this in Task 8. Shapes mirror a small real monorepo closely enough to
@@ -25,12 +26,12 @@ const boundaryRisk: Risk = {
   evidence: [{ file: 'apps/web/lib/data.ts', line: 3, statement: "import { pool } from '../../../packages/db/src/internal/pool'" }],
 };
 
-export const sampleNodes: BlockNode[] = [
-  { id: 'services/gateway', name: 'gateway', path: 'services/gateway', pills: ['express', 'zod'], fileCount: 18, riskCount: 1 },
-  { id: 'services/auth', name: 'auth', path: 'services/auth', pills: ['jsonwebtoken', 'bcrypt'], fileCount: 12, riskCount: 1 },
-  { id: 'apps/web', name: 'web', path: 'apps/web', pills: ['react', 'next'], fileCount: 47, riskCount: 1 },
-  { id: 'packages/db', name: 'db', path: 'packages/db', pills: ['pg', 'drizzle-orm'], fileCount: 9, riskCount: 0 },
-  { id: 'packages/ui', name: 'ui', path: 'packages/ui', pills: ['react', 'radix-ui'], fileCount: 31, riskCount: 0 },
+export const sampleNodes: WebviewBlockNode[] = [
+  { id: 'services/gateway', name: 'gateway', path: 'services/gateway', pills: ['express', 'zod'], fileCount: 18, riskCount: 1, dirty: false },
+  { id: 'services/auth', name: 'auth', path: 'services/auth', pills: ['jsonwebtoken', 'bcrypt'], fileCount: 12, riskCount: 1, dirty: false },
+  { id: 'apps/web', name: 'web', path: 'apps/web', pills: ['react', 'next'], fileCount: 47, riskCount: 1, dirty: true },
+  { id: 'packages/db', name: 'db', path: 'packages/db', pills: ['pg', 'drizzle-orm'], fileCount: 9, riskCount: 0, dirty: false },
+  { id: 'packages/ui', name: 'ui', path: 'packages/ui', pills: ['react', 'radix-ui'], fileCount: 31, riskCount: 0, dirty: false },
 ];
 
 export const sampleEdges: Edge[] = [
