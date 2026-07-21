@@ -18,19 +18,27 @@ sequenceDiagram
     Dev->>VSC: Run "BlockNet: Show Architecture"
     VSC->>Ext: command fires
     Ext->>Panel: create/reveal WebviewPanel
-    Panel->>WV: load html shell (CSP, fonts)
+    Panel->>WV: load html shell (CSP, fonts) — fresh navigation every call, see PROTOCOL.md
+    WV->>WV: main.tsx mounts App; subscribes window 'message' listener
+    WV->>Panel: postMessage webview/ready
+    Panel->>Ext: whenReady() resolves
+    Note over Ext,WV: nothing below is posted before webview/ready — VS Code drops any\npostMessage sent before the listener above is registered, no queue (PROTOCOL.md)
+    Ext->>Ext: commands/show-architecture.ts's state.ts: getPositions() from workspaceState (sparse, empty on first-ever open)
+    Ext-->>Panel: postMessage layout/restore
+    Panel-->>WV: layout/restore
+    WV->>WV: App.tsx's LiveApp stores positions in useState (not yet rendered — no graph/macro yet)
     Ext->>Runner: analyze(workspaceRoot)
     Runner->>Worker: fork + send({rootDir, cacheDir})
     Worker-->>Runner: progress(blocks, 1/4) ... (edges, 2/4) ... (risks, 3/4) ... (cache, 4/4)
     Runner-->>Panel: postMessage analysis/progress (×4)
     Panel-->>WV: analysis/progress
-    WV->>WV: render ProgressBar
+    WV->>WV: LiveApp shows "Analyzing — {phase} {done}/{total}"
     Worker-->>Runner: result: GraphResult
     Runner->>Ext: GraphResult
-    Ext->>Ext: state.ts: read persisted positions (none yet)
-    Ext-->>Panel: postMessage graph/macro, risks/update
+    Ext->>Ext: git.ts: getDirtyFiles(rootDir); dirty-blocks.ts: dirtyBlockIds(blocks, dirtyFiles) — augments each block with `dirty` (Task 9, STATE-OWNERSHIP.md: queried live, never cached)
+    Ext-->>Panel: postMessage graph/macro (nodes: WebviewBlockNode[]), risks/update
     Panel-->>WV: graph/macro, risks/update
-    WV->>WV: graph-store hydrates; layout.ts computes initial dagre layout
+    WV->>WV: layout.ts computes dagre; camera-store.ts layers layout/restore's\npositions over it for any id present there
     WV-->>Dev: BlockCanvas renders
 ```
 
@@ -56,6 +64,7 @@ sequenceDiagram
     Worker-->>Runner: result: GraphResult (delta, same shape as full), tagged G
     Runner->>Runner: if G is still the latest generation, forward;\nif a newer run superseded it, discard silently
     Runner->>Ext: GraphResult
+    Ext->>Ext: git.ts + dirty-blocks.ts re-augment blocks with `dirty` (same as flow 1 — queried fresh on every push, not just cold open)
     Ext-->>WV: postMessage graph/macro, risks/update
     WV->>WV: graph-store diff-merges by id; React re-renders\nonly the changed nodes/edges
 ```
@@ -78,32 +87,42 @@ The config-change case (`tsconfig.json`, `package.json`) is not incremental —
 full-scan path (still debounced and generation-tagged the same way). Same function, same
 worker, different `AnalyzeOptions`.
 
-**Implementation note (Task 5, 2026-07-19):** `analyze()` does not actually read
-`changedFiles` — as built, `cache/invalidate.ts` re-derives the dirty set itself by diffing a
-freshly-hashed `CacheManifest` against the previous one (docs/decisions/0008), rather than
-trusting the caller's hint. The outcome this diagram describes (scoped re-extraction for a
-content edit, full rescan for a config change) is what Task 5 actually produces either way;
-`changedFiles` itself is currently unread and reserved for Task 6, which may or may not end
-up wiring it as a perf optimization (skip hashing the full tree) once the watcher's real
-behavior is known — an open question, not decided here.
+**Implementation note (Task 5, 2026-07-19, reconfirmed unchanged through Task 8):** `analyze()`
+does not actually read `changedFiles` — as built, `cache/invalidate.ts` re-derives the dirty
+set itself by diffing a freshly-hashed `CacheManifest` against the previous one
+(docs/decisions/0008), rather than trusting the caller's hint. The outcome this diagram
+describes (scoped re-extraction for a content edit, full rescan for a config change) is what
+Task 5 actually produces either way; `changedFiles` remains unread by any code path. Wiring it
+as a perf optimization (skip hashing the full tree) is not planned work — not in
+docs/planning/TASKS-V1.md or ROADMAP-V2.md — so it isn't tracked as a pending decision here;
+if it becomes worth doing, it needs its own ADR (a real behavior change to what gets hashed),
+not a note in this flow doc.
 
-## 3. Open-in-editor (⤢ affordance / risk evidence click)
+## 3. Open-in-editor (risk evidence click)
 
 ```mermaid
 sequenceDiagram
     actor Dev
-    participant WV as webview: BlockNode / RiskPopover
+    participant WV as webview: RiskPopover
     participant Panel as panel.ts
     participant Cmd as commands/open-file.ts
     participant VSC as VS Code editor
 
-    Dev->>WV: click ⤢ on a block, or an evidence file:line
-    WV->>Panel: postMessage open/file {fileId, line?}
-    Panel->>Cmd: dispatch
+    Dev->>WV: click an evidence file:line entry
+    WV->>Panel: postMessage open/file {fileId, line}
+    Panel->>Cmd: dispatch (onOpenFile callback, wired at createOrReveal)
     Cmd->>VSC: showTextDocument(uri, {viewColumn: Beside, selection})
     VSC-->>Dev: real editor opens beside the graph panel
     Note over WV,VSC: graph panel is untouched — never a webview-embedded editor
 ```
+
+Task 9's original plan was also a block-card ⤢ triggering the identical `open/file` flow. Not
+built: a block is always a directory (`BlockNode.path`), never a single file — there's no
+canonical file for a block-level ⤢ to target without a drill-down step v1 doesn't have (the
+design-handoff prototype confirms this: its ⤢ affordance only ever exists on file-level
+cards). Deferred to `ROADMAP-V2.md`'s v2.0 micro view, where each card is a single file. `open/
+diff` (`vscode.diff` working-tree vs HEAD) is defined in the protocol but has the same gap —
+no v1 UI sends it — and is deferred alongside it.
 
 ## 4. Layout persistence (drag a node)
 
@@ -119,6 +138,6 @@ sequenceDiagram
     WV->>Cam: update position (optimistic, instant, local only)
     Cam->>Cam: debounce ~300ms
     Cam->>Panel: postMessage layout/persist {positions}
-    Panel->>State: workspaceState.update(positions)
-    Note over WV,State: on next panel open, panel.ts reads workspaceState and pushes\nlayout/restore BEFORE graph/macro — first paint has no flash
+    Panel->>State: onLayoutPersist(positions) → setPositions(context.workspaceState, positions)
+    Note over WV,State: on next panel open, commands/show-architecture.ts reads state.ts\nand awaits panel.whenReady() before pushing layout/restore BEFORE\ngraph/macro — first paint has no flash. panel.ts doesn't import state.ts\ndirectly — onLayoutPersist is a callback show-architecture.ts supplies at\ncreateOrReveal() time, so panel.ts stays a generic message-lifecycle shell
 ```

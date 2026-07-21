@@ -10,7 +10,7 @@ is a pure renderer" ([PROTOCOL.md](./PROTOCOL.md)) enforceable rather than a sug
 | `GraphResult` (current, in-memory) | Extension host | In-memory in `extension.ts`, pushed to webview | One VS Code session (reloaded from the disk snapshot on restart, then delta-checked against the manifest) |
 | Node positions | Extension host | `context.workspaceState` | Disk, across VS Code restarts, per-workspace |
 | Camera (pan/zoom/selection) | Webview | `camera-store.ts`, in-memory | Nothing — resets on panel reload (positions do persist, see above) |
-| Dirty-file (git) markers | Extension host | Queried live from the git API on each `graph/macro` push | Nothing — always fresh |
+| Dirty-file (git) markers | Extension host | Queried live from the git API on each `graph/macro` push (`git.ts` + `dirty-blocks.ts`, Task 9) | Nothing — always fresh |
 
 ## The rule this enforces
 
