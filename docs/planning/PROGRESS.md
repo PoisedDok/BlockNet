@@ -11,7 +11,7 @@ not rewrite TASKS-V1.md/ROADMAP-V2.md themselves (`CLAUDE.md`).
 | Phase 1 — Engine (Tasks 1-5) | Tasks 1-5 done. |
 | Checkpoint A (truth gate) | Signed off with Krish 2026-07-19 — see below. |
 | Checkpoint B (engine complete) | Reached 2026-07-19 — see Task 5's entry. `graph.json` schema frozen. |
-| Phase 2 — Extension (Tasks 6-9) | Task 6 done, two-pass review reconciled (1 real bug found + fixed). Pending: real F5 manual verification (no VS Code GUI in the building environment — see Task 6's entry). Tasks 7-9 not started. |
+| Phase 2 — Extension (Tasks 6-9) | Tasks 6-7 done. Pending: real F5 manual verification of both (no VS Code GUI in the building environment — see Task 6's and Task 7's entries; Task 7's own verification used a headless-browser screenshot comparison instead, not a substitute for a real extension host). Tasks 8-9 not started. |
 | Phase 3 — Ship (Task 10) | Not started. |
 
 ## Done
@@ -551,6 +551,19 @@ Also found and fixed by the doc-consistency lane: this very file claimed "33 new
 sentence whose own listed per-file breakdown summed to 35, not 33 — simple arithmetic error,
 now corrected (and the total has since moved again to 204, from the two fixes above).
 
+**Addendum (2026-07-20):** the two items above were narrated here as already fixed at the time
+this section was first written, but the `boundary.ts`/`risks/index.ts` source changes had not
+actually landed yet — only the tests had (RED, not GREEN): checked out that exact commit and
+ran the suite directly, 265/267 passed, the 2 failures being precisely the new wildcard-subpath
+cases this section describes. The source fix landed one commit later (`9dcfe25`), which also
+fixed a related gap in the same resolver: `RESOLVABLE_EXTENSIONS` (and the matching strip
+regex) was missing `.mts`/`.cts` — Node's native ESM/CJS TypeScript extensions, e.g. a real
+`vite.config.mts` — the same gap `cache/manifest.ts`'s `SOURCE_EXTENSIONS` had (see Task 5's
+entry). That commit also added `core/test/analyze.progress.test.ts` (asserting the CLI actually
+emits `[blocks] n/4` / `[edges] n/4` / `[risks] n/4` / `[cache] n/4` progress lines before its
+summary, not just that `onProgress` fires) and tightened `cli.test.ts`'s assertion on the same
+output to match. All now GREEN and reflected in the 267/267 count above.
+
 Everything else both lanes checked came back clean: the iterative Tarjan implementation was
 independently cross-validated against a from-scratch recursive Kosaraju reference on
 hand-built adversarial graphs (nested/adjacent SCCs, a high-in-degree hub, chorded cycles) and
@@ -856,18 +869,260 @@ analogous helpers elsewhere in `core/` that hardcode a literal backslash split �
 pre-existing minor drift in `core/`, not a Task 6 regression, and not fixed here since it's
 out of this task's scope.
 
+### Task 7 — Webview: React Flow macro graph with prototype fidelity ✅ (2026-07-20)
+
+ADR: [decisions/0007](../decisions/0007-react-flow-blocks-not-clouds.md). New npm workspace
+`extension/webview` (`@blocknet/webview`, its own `package.json` — added as a third root
+workspace member, not folded into `@blocknet/extension`). Scaffolded with `npm create vite@latest`
+(TASKS-V1.md's own suggested build order: use the ecosystem's own tooling), then the demo
+boilerplate stripped and replaced entirely; `tsconfig.app.json`/`tsconfig.node.json` extend
+`tsconfig.base.json` rather than duplicating it, and the root `eslint.config.js` gained a
+`react-hooks` block scoped to `extension/webview/src|test/**` — no per-package lint config
+(REPO-STANDARDS.md).
+
+**What got built**, per `docs/architecture/DIRECTORY-TREE.md`'s webview section (rewritten
+this task to match what actually landed, not the pre-Task-7 sketch):
+- `flow/BlockCard.tsx` — pure presentational card (status dot, `N× ⚠` risk pill, path, tech
+  pills, and the **connection-count badge**, new beyond the design reference per Task 7's own
+  acceptance criteria) with no React Flow dependency, so it's unit-testable standalone. An
+  `interactive` prop suppresses its own `role`/`tabIndex`/keyboard handling when RF's own node
+  wrapper — confirmed by reading `@xyflow/react`'s source, not assumed — already provides all
+  three, avoiding a nested-interactive-element accessibility anti-pattern (two tab stops for
+  one visual card).
+- `flow/BlockNode.tsx` — the thin RF `NodeProps` adapter: invisible `Handle` anchors (the
+  visible port dot is drawn by `RiskEdge.tsx` itself, matching the design reference's own
+  SVG-drawn ports) plus `BlockCard` with `interactive={false}`.
+- `flow/edge-path.ts` + `flow/RiskEdge.tsx` — `edge-path.ts` is an exact port of the design
+  reference's own `pathOf()` (`design_handoff_blocknet_extension/BlockNet.dc.html`), not RF's
+  generic `getBezierPath`, because visual parity depends on that specific curvature (control
+  points floored at 52px). `RiskEdge.tsx` renders it via RF's `BaseEdge` (which already
+  provides the wide invisible interaction path the design reference builds by hand) plus port
+  circles and a `!` risk badge at the true midpoint.
+- `flow/layout.ts` — dagre, left-to-right rank flow (matches the output-right/input-left port
+  convention). Runs on every hydration for now; Task 8 scopes it to `BlockNode` ids absent
+  from a persisted positions map.
+- `flow/graph-derive.ts` — `relatedIds()` (selection→dimming, mirrors the design reference's
+  `relatedSet()` exactly) and `connectionCounts()` (the new badge's data).
+- `flow/block-label.ts` — one accessible-name function shared by `BlockCard`'s standalone
+  mode and `BlockCanvas.tsx`'s `node.ariaLabel`, so the two never drift.
+- `flow/BlockCanvas.tsx` — the RF root: `fitView` (see bug 6 below), pan/zoom clamp
+  `k∈[0.3,2.4]`, click-to-select with dimming on both nodes and edges, RF's own `<Background
+  variant="dots">` and `<Panel>` used for the grid and the zoom-control overlay instead of
+  hand-rolling either.
+- `ui/StatusBar.tsx`, `ui/ZoomControls.tsx` — brand/legend/live risk count; custom-styled
+  −/percent/+/reset control.
+- `theme/tokens.css` — design tokens (`docs/planning/TASKS-V1.md`'s Design Tokens section) as
+  semantic custom properties resolving through `var(--vscode-*, prototype-dark-fallback)` —
+  confirmed against VS Code's own webview API docs that it stamps `body.vscode-light` /
+  `-dark` / `-high-contrast` / `-high-contrast-light` and exposes `var(--vscode-*)` theme
+  colors, rather than assumed. Card gradients are derived via `color-mix()` from a single
+  `--vscode-editorWidget-background` value (not two hardcoded stops), so they adapt correctly
+  in both directions instead of just working for the prototype's one dark palette. A
+  `body.vscode-high-contrast` override forces a real border on every card (see bug 6's
+  screenshot verification) — a card whose only affordance was a soft `box-shadow` is exactly
+  the WCAG 1.4.11 non-text-contrast failure that would otherwise ship.
+- `fixtures/sample-graph.ts` (5 blocks exercising a real CIRCULAR cycle, a BOUNDARY
+  deep-import, and a risk-free edge all at once) and `fixtures/stress-graph.ts` (generated
+  30-block/100-edge fixture — Task 7's stated scale target, reachable in the built app via a
+  `?stress=1` dev/QA query param).
+- Self-hosted fonts: Google's `css2` API serves one **variable-font** woff2 per family across
+  the whole declared weight range (`400 700` etc.), not one static file per weight — verified
+  by inspecting the actual response rather than assumed, which cut the font payload from a
+  presumed 7 files down to 2 real ones.
+- `extension/src/webview-html.ts` (new, vscode-free, unit-tested) + `panel.ts` rewritten to
+  serve the real built app: reads `webview/dist/index.html`, injects a `<base>` tag + strict
+  CSP meta + a nonce on the built `<script>` tag, with `localResourceRoots` scoped to
+  `webview/dist/`. Falls back to a friendly in-panel message (never a blank panel) if the
+  webview bundle wasn't built — the same reasoning `AnalysisRunner` taking `workerPath` as a
+  parameter already established: a build-time check doesn't help someone who edits `src` and
+  reloads without rebuilding.
+
+**Verification actually performed:** `sh .githooks/pre-push` green across all three
+workspaces — core 267/267 (unchanged, 27 files), extension 26/26 (4 files, +5 for
+`webview-html.test.ts`, +1 from the review round below), webview 41/41 (6 files, new, +1 from
+the review round below), build/typecheck/lint clean. Production `vite build` produces a
+~459 KB JS bundle (~145 KB gzip — the exact byte count moves a little build to build and isn't
+pinned here for that reason; noted, not yet measured against a hard budget since none is
+documented; not egregious for a webview that loads once per panel open, not per keystroke).
+**Real visual verification, not just passing tests**: a headless Chromium instance
+(Playwright, system binary — not bundled as a repo dependency, a one-off verification tool)
+screenshotted the built app served via `vite preview` against the original design reference
+(`BlockNet.dc.html`) side-by-side, plus simulated VS Code light and high-contrast themes
+(representative `--vscode-*` values injected, since no real VS Code GUI
+exists in this environment) and the 30-block/100-edge stress fixture. Confirmed genuine visual
+parity: gradient cards, status dots, risk pills, tech pills, bezier ports, dashed/pulsing
+edges with the `!` badge, status bar, legend, and zoom controls all match closely; the
+connection-count badge (new) and the light/high-contrast adaptations (also new, the prototype
+is dark-only) render correctly. **Not performed**: a real F5 extension-development-host
+manual run (same environment gap as Task 6) and empirical interaction-smoothness/FPS
+profiling at the 30-block/100-edge scale — the stress screenshot confirms a clean, legible,
+non-overlapping static render at that scale, not measured frame timing under drag/pan.
+
+**Seven real bugs found and fixed during construction** (TDD'd where the fix was logic, not
+tooling; all confirmed by reproducing directly, not assumed):
+
+1. **A poisoned `package-lock.json` silently prevented `@vitejs/plugin-react` from ever being
+   materialized to disk**, despite `npm install` reporting success and the package being
+   correctly listed in the lockfile's resolved tree. Traced through `npm --loglevel silly`:
+   the package appeared in the audit request but never received a `reify`/`ADD` action from
+   two consecutive earlier failed installs (an `ERESOLVE` on a since-removed `eslint-plugin-
+   jsx-a11y` addition, an `ETARGET` on a wrong guessed version for
+   `@testing-library/jest-dom`) leaving inconsistent state. Fixed by a full clean reinstall
+   (`rm -rf node_modules package-lock.json && npm install`); confirmed the same package
+   installs correctly in total isolation, ruling out a real npm/registry defect.
+2. **jsdom has no `ResizeObserver`, and React Flow's node-measurement pipeline waits for its
+   callback before making a node visible or routing any edge to it** — confirmed by reading
+   `@xyflow/system`'s source (`updateNodeInternals` reads `offsetWidth`/`offsetHeight`/
+   `getBoundingClientRect()` on the real DOM node, not the observer entry's own payload).
+   Unmocked, this isn't a crash — every node just silently stays `visibility: hidden` and
+   every edge renders zero, which reads exactly like "the component doesn't render edges"
+   unless traced to the actual cause. Fixed with a `ResizeObserver` stub plus mocked
+   `offsetWidth`/`offsetHeight`/`getBoundingClientRect()`.
+3. **jsdom also has no `DOMMatrixReadOnly`**, thrown from inside `@xyflow/system`'s own
+   viewport-transform math. A minimal stand-in covering only the fields RF actually reads.
+4. **`happy-dom` was tried as a jsdom alternative** (it advertises native support for both
+   gaps above) but broke the `document` global entirely in this exact toolchain — every
+   `render()` call failed with "document is not defined." Reverted to jsdom + the targeted
+   polyfills above rather than chasing an unrelated regression in a different direction.
+5. **`userEvent.click()` on any React-Flow-rendered node or the pane throws an unhandled
+   async error** — RF's pane and draggable nodes attach native (non-React) d3-drag/d3-zoom
+   `mousedown` listeners for real dragging, and d3-drag's `nodrag()` unconditionally reads
+   `event.view.document`; jsdom's `MouseEvent` leaves `view` null unless a caller sets it
+   explicitly, and neither `userEvent` nor `fireEvent` do. This surfaced as a nonzero
+   `vitest` exit code (would have failed `pre-push`) despite every assertion passing. Two
+   attempts at a global fix — subclassing `MouseEvent`, patching
+   `MouseEvent.prototype.view` via `Object.defineProperty` — were each tried and both broke
+   jsdom's own environment bootstrapping *worse*, reproducing "document is not defined" on
+   completely unrelated renders; confirmed by isolating each change and reverting. Fixed at
+   the call site instead: `fireEvent.click()` (fires exactly one `'click'` event — all RF's
+   `onNodeClick`/`onPaneClick`/`onEdgeClick` actually listen for) instead of
+   `userEvent.click()` (fires a realistic full pointerdown/mousedown/mouseup/click sequence,
+   including the `mousedown` that triggers this).
+6. **`BlockCanvas`'s initial fixed `defaultViewport` (`x:0,y:0,zoom:0.8`) rendered two cards
+   cut off above the viewport's top edge** on the real sample fixture — caught by the headless
+   screenshot verification above, not by any test (no test asserted on actual pixel framing).
+   dagre's raw layout coordinates depend on graph shape and aren't centered around the origin,
+   so a fixed viewport only happens to work for whichever graph shape you tested with. Fixed
+   with RF's `fitView` (computed from actual node bounds) instead; `onReset` now calls
+   `fitView()` again rather than resetting to a fixed viewport.
+7. **Vite's default root-absolute asset paths (`/assets/...`) don't resolve under a
+   `vscode-webview://` URI**, which isn't served from `/` — confirmed directly against the
+   built output before assuming it was a problem. Fixed with `base: './'` in
+   `webview/vite.config.ts`, so every asset reference the build emits (including the CSS's
+   own `@font-face url()`s) is relative and resolves once `webview-html.ts` injects a
+   `<base>` tag — no per-asset URL rewriting needed in `panel.ts`.
+
+Also found and fixed, smaller: `extension/` had no `vitest.config.ts` of its own — `.vscodeignore`
+had actually already referenced one (a forward reference from an earlier task, harmless until
+now), but without it vitest's default `**/*.test.ts[x]` discovery swept up the newly-added
+nested `webview/` workspace's own test suite too, failing all of them under `extension`'s
+`node` environment instead of `webview`'s own `jsdom` one. Scoped `extension`'s test include
+to `test/**/*.test.ts`. And an `exactOptionalPropertyTypes` strictness error on
+`RiskEdge.tsx`'s `markerEnd` prop (`string | undefined` from `EdgeProps`, not assignable to
+`markerEnd?: string`), fixed with a conditional spread rather than loosening the compiler flag.
+
+**Two-pass adversarial review (2026-07-21): run, findings reconciled, fixes applied.**
+
+Doc-consistency pass verified every numeric claim above by actually re-running the gates
+(not trusting the prose) and found them accurate, confirmed `TASKS-V1.md`/`ROADMAP-V2.md`
+untouched, and found every cross-doc claim between `DIRECTORY-TREE.md`/`LAYERS.md`/
+`PROTOCOL.md` consistent with the real code — plus one real gap: five new CSS files
+(`flow/{BlockCanvas,BlockCard,RiskEdge}.css`, `ui/{StatusBar,ZoomControls}.css`) were entirely
+missing from `DIRECTORY-TREE.md` despite the doc's own "every file, annotated" charter and
+despite every sibling `.tsx` in the same directories being listed in full — added. Also noted,
+smaller: `extension/webview/test/` was described in prose rather than enumerated file-by-file
+the way `core/test/` is (a real but accepted inconsistency in rigor, not fixed — the prose
+description is still accurate); and that `extension/webview/**` already type-imports from
+`@blocknet/core` (fixtures, `graph-derive.ts`, `layout.ts`) even though no doc says so
+explicitly, which doesn't contradict anything (it's the data-type surface, not
+`shared/protocol.ts`'s message contract) but is worth knowing before assuming zero coupling.
+
+Architectural-soundness pass found **two real bugs**, both fixed with regression tests:
+
+1. **Node drag silently did nothing** — `BlockCanvas.tsx`'s `<ReactFlow>` ran in controlled
+   mode (`nodes`/`edges` recomputed from props via `useMemo`, no `defaultNodes`) with no
+   `onNodesChange` handler. Traced directly in `@xyflow/react`'s own source:
+   `triggerNodeChanges` only commits a change back into the canonical node array when
+   `hasDefaultNodes` is true, a flag set only by supplying `defaultNodes` — with neither that
+   nor `onNodesChange`, every drag (and keyboard arrow-move) computed a new position and then
+   silently discarded it on the very next render. Confirmed empirically (a real drag gesture
+   left a node's `transform` completely unchanged) before being told it was fixed. This is a
+   direct miss against Task 7's own stated acceptance criteria — `TASKS-V1.md` lists "node
+   drag" as in-scope and "Pan/zoom/drag/select smooth at 30 blocks / 100 edges" as the literal
+   acceptance line, not something deferred to Task 8 (Task 8 is about *persisting* layout
+   across reload, a different concern). **Fixed**: `onNodesChange` now commits `'position'`
+   -type changes into a `dragOverrides` map layered over `layout.ts`'s dagre output. First
+   attempt at the fix caused a real regression of its own — reacting to every change type
+   (not just `'position'`) created an infinite render loop, since a same-value-but-new-object
+   state update on a `'dimensions'` change (fired by RF's own node-measurement pipeline)
+   re-triggers measurement, which fires another `'dimensions'` change, forever; caught by the
+   test suite itself (`Maximum update depth exceeded`), not missed. Narrowed the filter to
+   `type === 'position'` only, which fixed it. Regression test added
+   (`BlockCanvas.test.tsx`: "persists a node position after a move") using RF's own
+   keyboard-driven node movement (arrow keys on a selected node) rather than a real mouse
+   drag gesture — constructing a `MouseEvent` with an explicit `view` throws `"member view is
+   not of type Window"` in this exact jsdom/vitest combination even in the most minimal
+   possible case (`window instanceof Window` is `false` here — confirmed directly as a real
+   jsdom/vitest module-duplication issue, not something in our control, and not the same
+   `event.view`-is-null gap `test/setup.ts` already documents for d3-drag). Also verified in a
+   **real** browser (headless Chromium via Playwright, not jsdom): a real mouse drag on
+   `gateway` moved it and its connected risk edges followed correctly — confirming the fix
+   works end-to-end, not just against the keyboard-based unit test's narrower path.
+2. **`panel.ts` could get permanently stuck showing a blank panel** — `createOrReveal()`'s
+   reuse path (`ArchitecturePanel.#current !== undefined`) reassigned `webview.html` but never
+   `webview.options`, which is where `enableScripts` lives. Concrete failure: open the panel
+   with no workspace (`enableScripts: false`, set once at `createWebviewPanel(...)`), then
+   open a folder and re-trigger the command — `createOrReveal('ready', ...)` finds the
+   existing panel, swaps in the real built HTML, but `enableScripts` stays `false` forever,
+   so the bundle's `<script>` never runs. Confirmed `vscode.Webview.options` is a mutable,
+   non-`readonly` property (`@types/vscode`), so this was a real, fixable gap, not an API
+   limitation — and confirmed via `git show` that the missing-options-update logic predates
+   Task 7 (it isn't a new regression), but Task 7 is what makes the `'ready'` state's entire
+   content depend on that `<script>` actually running, raising the blast radius from "static
+   text doesn't show" (Task 6) to "blank panel" (Task 7). **Fixed**: extracted a
+   `webviewOptions()` helper used both at construction and on every reveal, so `.options`
+   never drifts from the state actually being rendered. `panel.ts` has no dedicated test,
+   consistent with this codebase's established convention for vscode-API shells
+   (`watcher.ts`, `extension.ts` — none of them have one either, "verified manually via
+   F5"); typechecked instead.
+
+The same pass also flagged one **defensible-but-fixed-anyway** finding: `webview-html.ts`'s
+nonce injection used a non-global `.replace()`, patching only the first `<script>` tag.
+Today's build emits exactly one, so this wasn't live, but it would silently CSP-block (fail
+closed, not open — not a security hole, but a hard-to-diagnose regression) any future second
+`<script>` tag from e.g. vite code-splitting a vendor chunk. Added the `/g` flag and a
+regression test asserting both tags get nonced in a synthetic multi-script fixture.
+
+Concurrency/lifecycle correctness the pass explicitly verified by *running* real code, not
+just reading it: `layout.ts`/`graph-derive.ts` stress-tested directly via `npx tsx` against
+real cycles, self-referential edges, disconnected components, edges referencing nonexistent
+node ids (stale/partial data), and the 30-node/100-edge scale — all handled correctly and
+defensively, including confirming (via `core/src/edges/block-aggregate.ts`) that the real
+analysis pipeline never actually emits self-referencing block edges, so the webview's
+self-loop handling is defensive-only, not independently exploitable. The CSP itself was
+checked against the real built bundle (not the test's synthetic fixture) and found
+sufficient — no external domains or images anywhere in source or in `@xyflow/react`'s own
+bundled CSS. `test/setup.ts`'s mocked 236×120 node dimensions were checked and ruled out as
+masking a real bug, since every test asserts on DOM structure/data attributes/inline opacity,
+never pixel geometry. `webview-html.ts` was checked against `cache-bridge.ts`/
+`change-buffer.ts`'s established "pure, vscode-free, directly unit-tested" pattern and found
+to genuinely follow it, not silently diverge.
+
 ## Next up
 
-A real F5 manual verification (outstanding — see "Verification actually performed" above:
-this session's environment has no VS Code CLI/GUI). Then Task 7 (webview — React Flow macro
-graph, static fixture data first, parallelizable with earlier tasks per `TASKS-V1.md` but
-naturally sequenced after Task 6 in practice).
+A real F5 manual verification of
+Tasks 6 and 7 together (outstanding — see "Verification actually performed" above: this
+session's environment has no VS Code CLI/GUI). Then Task 8 (bridge — live `graph/macro` +
+`risks/update` over `postMessage`, replacing Task 7's static fixtures; `layout/restore`/
+`layout/persist` via `workspaceState`; risk badge click → popover).
 
 ## Deferred by design (not gaps)
 
-- `extension/webview/` (the real React Flow UI), `state.ts`, `git.ts`,
-  `commands/open-file.ts` — Tasks 7–9, not Task 6; see Task 6's entry above for exactly what
-  stands in for each in the meantime.
+- `state.ts`, `git.ts`, `commands/open-file.ts`, live `postMessage` wiring on the webview
+  side (`vscode-api.ts`, a `graph-store.ts`-shaped read-only mirror), `ui/ProgressBar.tsx`,
+  `ui/RiskPopover.tsx`, `ui/EmptyState.tsx` — Tasks 8–9, not Task 7; see Task 7's entry above
+  for exactly what stands in for each in the meantime (static fixtures via `App.tsx`, the
+  inline no-workspace/multi-root bodies already in `panel.ts` since Task 6).
 
 ## Tracked risks
 
