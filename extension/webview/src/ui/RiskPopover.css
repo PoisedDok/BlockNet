@@ -1,0 +1,108 @@
+.bn-risk-popover {
+  position: absolute;
+  /* StatusBar.css is a fixed top strip: top:0, height:54px, z-index:20 — starting this any
+   * higher up (it was top:16px, z-index:10) put the popover's own header/close-button
+   * partially underneath it, clipped and un-clickable. 70px = 54px status bar + a 16px gap. */
+  top: 70px;
+  right: 16px;
+  z-index: 15;
+  width: 320px;
+  max-height: calc(100% - 86px);
+  overflow-y: auto;
+  padding: 14px 16px;
+  background: var(--bn-card-bg);
+  border: 1px solid var(--bn-risk-border);
+  border-radius: var(--bn-radius-card);
+  box-shadow: var(--bn-shadow-card);
+  font-family: var(--bn-font-ui);
+  color: var(--bn-text-body);
+}
+
+.bn-risk-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.bn-risk-popover-tag {
+  font-family: var(--bn-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--bn-risk-strong);
+}
+
+.bn-risk-popover-close {
+  border: none;
+  background: transparent;
+  color: var(--bn-text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.bn-risk-popover-close:hover,
+.bn-risk-popover-close:focus-visible {
+  color: var(--bn-text-primary);
+}
+
+.bn-risk-popover-oneline {
+  font-weight: 600;
+  color: var(--bn-text-primary);
+  margin: 0 0 6px;
+}
+
+.bn-risk-popover-explain,
+.bn-risk-popover-fix {
+  font-size: 13px;
+  margin: 0 0 8px;
+}
+
+.bn-risk-popover-evidence {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--bn-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bn-risk-popover-evidence-loc {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-family: var(--bn-font-mono);
+  font-size: 11px;
+  color: var(--bn-text-muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 2px;
+  transition: color 0.15s ease, text-decoration-color 0.15s ease;
+}
+
+.bn-risk-popover-evidence-loc:hover,
+.bn-risk-popover-evidence-loc:focus-visible {
+  color: var(--bn-text-primary);
+  text-decoration-color: currentColor;
+}
+
+.bn-risk-popover-evidence-loc:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, var(--bn-border-selected));
+  outline-offset: 2px;
+}
+
+.bn-risk-popover-evidence-statement {
+  display: block;
+  font-family: var(--bn-font-mono);
+  font-size: 12px;
+  color: var(--bn-text-body);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
