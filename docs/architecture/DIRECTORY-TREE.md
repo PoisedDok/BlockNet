@@ -6,7 +6,7 @@ including `state.ts` and `git.ts`, both Layer 4).
 
 ```
 BlockNet/
-├── package.json                      # npm workspaces root: ["core", "extension"]
+├── package.json                      # npm workspaces root: ["core", "extension", "extension/webview"]
 ├── package-lock.json                 # single lockfile, single package manager
 ├── tsconfig.base.json                # shared strict compiler options, extended by both packages
 ├── eslint.config.js                  # flat config; carries the "core has no vscode import" rule
@@ -282,16 +282,23 @@ BlockNet/
 │   ├── package.json                  # name, publisher, engines.vscode, activationEvents,
 │   │                                 #   contributes.commands, main → dist/extension.js
 │   ├── tsconfig.json
-│   ├── esbuild.config.ts             # bundles the HOST only (src/) — separate from webview
-│   │                                 #   build. Also copies @blocknet/core's own
-│   │                                 #   dist/ipc-worker.js verbatim into dist/ipc-worker.mjs
-│   │                                 #   rather than re-bundling it — see PROCESS-BOUNDARY.md
+│   ├── vitest.config.ts              # scopes test discovery to test/**/*.test.ts — without
+│   │                                 #   it, vitest's default **/*.test.ts[x] sweep also
+│   │                                 #   picks up the nested webview/ workspace's own tests
+│   │                                 #   (jsdom + React Flow polyfills), failing them under
+│   │                                 #   this workspace's 'node' environment (Task 7)
+│   ├── esbuild.config.ts             # bundles the HOST only (src/) — separate from webview's
+│   │                                 #   own vite build, never touched here. Also copies
+│   │                                 #   @blocknet/core's own dist/ipc-worker.js verbatim into
+│   │                                 #   dist/ipc-worker.mjs rather than re-bundling it — see
+│   │                                 #   PROCESS-BOUNDARY.md
 │   ├── .vscodeignore                 # excludes src/**, webview/src/**, test/** — see REPO-STANDARDS.md
 │   ├── media/icon.png                # 128×128 Marketplace icon
 │   │
 │   ├── src/                          # LAYERS 3-4 — everything with a vscode import, except
-│   │   │                             #   analysis-runner.ts/cache-bridge.ts/change-buffer.ts,
-│   │   │                             #   deliberately kept vscode-free — see LAYERS.md
+│   │   │                             #   analysis-runner.ts/cache-bridge.ts/change-buffer.ts/
+│   │   │                             #   webview-html.ts, deliberately kept vscode-free — see
+│   │   │                             #   LAYERS.md
 │   │   ├── extension.ts              # activate()/deactivate(); lazy activation
 │   │   │                             #   (workspaceContains:**/tsconfig.json explicit;
 │   │   │                             #   onCommand auto-generated from contributes.commands
@@ -311,12 +318,20 @@ BlockNet/
 │   │   │                             #   thin vscode-API shell wired on top of this.
 │   │   ├── watcher.ts                # createFileSystemWatcher, debounces (~500ms), feeds
 │   │   │                             #   change-buffer.ts, fires onTrigger with the flush
-│   │   ├── panel.ts                  # WebviewPanel lifecycle: CSP, html shell, disposal.
-│   │   │                             #   One panel, singleton. Task 6 ships a placeholder
-│   │   │                             #   body (progress text + raw JSON) — the real React
-│   │   │                             #   Flow macro graph is Task 7's; the no-workspace/
-│   │   │                             #   multi-root bodies are also a Task-6-only stand-in
-│   │   │                             #   for the real EmptyState.tsx (Tasks 7-8).
+│   │   ├── webview-html.ts           # pure transform of the built webview/dist/index.html:
+│   │   │                             #   injects a <base> tag (vite's base:'./' emits
+│   │   │                             #   relative asset paths — see webview/vite.config.ts),
+│   │   │                             #   a strict CSP meta tag, and a nonce on the built
+│   │   │                             #   <script> tag. Takes webview.cspSource/asWebviewUri()
+│   │   │                             #   results as plain strings, not the vscode.Webview
+│   │   │                             #   object, so it's unit-testable headlessly (Task 7)
+│   │   ├── panel.ts                  # WebviewPanel lifecycle: CSP, html shell, disposal. One
+│   │   │                             #   panel, singleton. Serves the real built React Flow
+│   │   │                             #   app (webview-html.ts + webview/dist/) since Task 7 —
+│   │   │                             #   falls back to a friendly in-panel message (never a
+│   │   │                             #   blank panel) if the webview bundle wasn't built. The
+│   │   │                             #   no-workspace/multi-root bodies are still an inline
+│   │   │                             #   stand-in for the real EmptyState.tsx (Task 8)
 │   │   ├── state.ts                  # workspaceState: node positions + last-good manifest ptr
 │   │   │                             #   — Task 8, not yet built
 │   │   ├── git.ts                    # dirty-file lookup via the built-in git extension's API
@@ -328,40 +343,113 @@ BlockNet/
 │   │   │                             #   — Task 9, not yet built
 │   │   │
 │   │   └── shared/
-│   │       └── protocol.ts           # see PROTOCOL.md — imported by both src/ and webview/src/
+│   │       └── protocol.ts           # see PROTOCOL.md. extension/src/** imports it
+│   │                                 #   (panel.ts's post()); extension/webview/src/** doesn't
+│   │                                 #   yet — Task 7 built the webview against static fixture
+│   │                                 #   data, deliberately not this contract; Task 8 wires it
 │   │
-│   └── webview/                      # LAYER 5 — React app, own build (vite), zero vscode import
+│   └── webview/                      # LAYER 5 — @blocknet/webview, its own npm workspace and
+│       │                             #   npm package (not part of @blocknet/extension's own
+│       │                             #   package — unlike LAYERS.md originally assumed),
+│       │                             #   own vite build, zero vscode import. Built with Task 7
+│       │                             #   against static fixture data only — see src/fixtures/
+│       │                             #   and docs/planning/TASKS-V1.md
+│       ├── package.json              # name: @blocknet/webview
 │       ├── index.html
-│       ├── vite.config.ts            # output → extension/webview/dist, packaged into .vsix
+│       ├── vite.config.ts            # base:'./' (relative asset paths — a vscode-webview://
+│       │                             #   URI isn't served from '/', confirmed directly; see
+│       │                             #   its own header comment), output → dist/, packaged
+│       │                             #   into the .vsix (.vscodeignore excludes webview/src/**
+│       │                             #   but not webview/dist/**)
+│       ├── tsconfig.json             # references tsconfig.app.json + tsconfig.node.json
+│       ├── tsconfig.app.json         # extends ../../tsconfig.base.json (REPO-STANDARDS.md:
+│       │                             #   "the only shared compiler config") + vite/browser-
+│       │                             #   specific overrides (jsx, DOM lib, bundler resolution)
+│       ├── tsconfig.node.json        # same pattern, for vite.config.ts itself (Node context)
 │       ├── src/
-│       │   ├── main.tsx
-│       │   ├── App.tsx               # top-level: EmptyState | ProgressBar | BlockCanvas
-│       │   ├── vscode-api.ts         # acquireVsCodeApi() wrapper, typed on shared/protocol.ts
+│       │   ├── main.tsx              # createRoot(...).render(<App />)
+│       │   ├── App.tsx               # renders <BlockCanvas> with static fixture data
+│       │   │                         #   (sample-graph.ts, or stress-graph.ts behind a
+│       │   │                         #   `?stress=1` dev/QA query param) — no postMessage,
+│       │   │                         #   no EmptyState/ProgressBar routing yet (Task 8)
+│       │   ├── index.css             # self-hosted @font-face (Space Grotesk + JetBrains
+│       │   │                         #   Mono, variable-font woff2s in src/assets/fonts/),
+│       │   │                         #   reset, scrollbar styling
 │       │   │
-│       │   ├── state/
-│       │   │   ├── graph-store.ts    # host-pushed, read-only mirror: nodes/edges/risks
-│       │   │   └── camera-store.ts   # webview-owned: viewport, selection, in-flight drag
+│       │   ├── theme/
+│       │   │   └── tokens.css        # design tokens as semantic custom properties resolving
+│       │   │                         #   through var(--vscode-*, prototype-dark-fallback) —
+│       │   │                         #   genuinely follows the host's light/dark/high-contrast
+│       │   │                         #   theme (body.vscode-light/-dark/-high-contrast, set by
+│       │   │                         #   VS Code itself) rather than forcing one fixed look
 │       │   │
 │       │   ├── flow/
-│       │   │   ├── BlockCanvas.tsx   # React Flow root; pan/zoom clamp k∈[0.3,2.4]
-│       │   │   ├── BlockNode.tsx     # card: status dot, risk pill, tech pills, ⤢ affordance
-│       │   │   ├── RiskEdge.tsx      # bezier port→port; dashed animated / solid pulsing red
-│       │   │   └── layout.ts         # dagre layout, applied per-node not per-session: runs
-│       │   │                         #   on every graph/macro hydration for any BlockNode id
-│       │   │                         #   absent from the positions map, leaving nodes that
-│       │   │                         #   already have a persisted position untouched — so a
-│       │   │                         #   block added mid-session still gets placed, not
-│       │   │                         #   left at a default/undefined coordinate
+│       │   │   ├── BlockCanvas.tsx   # React Flow root: fitView (not a fixed default
+│       │   │   │                     #   viewport — dagre's raw coordinates aren't centered
+│       │   │   │                     #   around origin), pan/zoom clamp k∈[0.3,2.4],
+│       │   │   │                     #   selection-driven dimming, status bar + zoom controls.
+│       │   │   │                     #   onNodesChange commits position-only changes into a
+│       │   │   │                     #   dragOverrides map layered over layout.ts's dagre
+│       │   │   │                     #   output — RF runs in controlled mode (no defaultNodes),
+│       │   │   │                     #   so drag/arrow-key moves are silently discarded
+│       │   │   │                     #   without it (two-pass review found this as a real bug)
+│       │   │   ├── BlockCanvas.css   # full-bleed canvas sizing; hides RF's default
+│       │   │   │                     #   selection-rect/connection-line chrome (dead code
+│       │   │   │                     #   paths — nodesConnectable={false}, selectionOnDrag={false})
+│       │   │   ├── BlockCard.tsx     # pure presentational card (dot/risk pill/tech
+│       │   │   │                     #   pills/connection-count badge) — no React Flow
+│       │   │   │                     #   dependency, so it's unit-testable in isolation;
+│       │   │   │                     #   `interactive` prop suppresses its own role/tabIndex/
+│       │   │   │                     #   keyboard handling when RF's own node wrapper (which
+│       │   │   │                     #   already owns those) is the one mounting it
+│       │   │   ├── BlockCard.css     # design tokens as CSS custom properties (theme/tokens.css)
+│       │   │   ├── BlockNode.tsx     # thin RF NodeProps adapter: invisible Handle anchors
+│       │   │   │                     #   (RiskEdge draws the visible port dot) + BlockCard
+│       │   │   ├── RiskEdge.tsx      # bezier port→port (edge-path.ts's exact port of the
+│       │   │   │                     #   design reference's pathOf(), not RF's generic
+│       │   │   │                     #   getBezierPath, for visual parity); dashed animated /
+│       │   │   │                     #   solid pulsing red with a "!" midpoint badge
+│       │   │   ├── RiskEdge.css      # bnflow/bnpulse @keyframes — dashed-flow/risk-pulse animations,
+│       │   │   │                     #   ported from the design reference verbatim
+│       │   │   ├── edge-path.ts      # pure bezier path math, unit-tested independent of RF
+│       │   │   ├── layout.ts         # dagre LR auto-layout — runs on every hydration for now
+│       │   │   │                     #   (no persisted positions exist yet); Task 8 scopes
+│       │   │   │                     #   this to BlockNode ids absent from a positions map
+│       │   │   ├── graph-derive.ts   # pure: relatedIds() (selection→dimming, mirrors the
+│       │   │   │                     #   design reference's relatedSet()) + connectionCounts()
+│       │   │   │                     #   (the connection-count badge, new beyond the reference)
+│       │   │   └── block-label.ts    # shared accessible-name text: BlockCard's own aria-label
+│       │   │                         #   when standalone, and BlockCanvas.tsx's node.ariaLabel
+│       │   │                         #   when RF's own node wrapper (which already provides
+│       │   │                         #   tabIndex/role/keyboard handling) owns the a11y instead
 │       │   │
 │       │   ├── ui/
-│       │   │   ├── ProgressBar.tsx   # renders analysis/progress {phase, done, total}
-│       │   │   ├── RiskPopover.tsx   # oneLine/explain/fix + evidence list
-│       │   │   └── EmptyState.tsx    # no-workspace / no-git / non-TS / <2-block /
-│       │   │                         #   multi-root-workspace states
+│       │   │   ├── StatusBar.tsx     # brand, legend, live risk count — no ProgressBar/
+│       │   │   │                     #   EmptyState routing yet (Task 8)
+│       │   │   ├── StatusBar.css
+│       │   │   ├── ZoomControls.tsx  # −/percent/+/reset, mounted via RF's own <Panel>
+│       │   │   └── ZoomControls.css
 │       │   │
-│       │   └── theme/tokens.css      # design tokens mapped onto var(--vscode-*)
+│       │   ├── fixtures/
+│       │   │   ├── sample-graph.ts   # 5 blocks exercising every visual state at once: a real
+│       │   │   │                     #   CIRCULAR cycle, a BOUNDARY deep-import, a risk-free edge
+│       │   │   └── stress-graph.ts   # generated 30-block/100-edge fixture — Task 7's stated
+│       │   │                         #   pan/zoom/drag/select scale target
+│       │   │
+│       │   └── assets/fonts/         # self-hosted Space Grotesk + JetBrains Mono, downloaded
+│       │                             #   as their single variable-font woff2 each (Google
+│       │                             #   Fonts serves one variable file across a declared
+│       │                             #   weight range, not one static file per weight)
 │       │
-│       └── fonts/                    # self-hosted Space Grotesk + JetBrains Mono
+│       └── test/                     # jsdom + polyfills (ResizeObserver, DOMMatrixReadOnly)
+│           │                         #   React Flow needs and jsdom doesn't provide — see
+│           │                         #   setup.ts's own comments for what each one is for and
+│           │                         #   why (confirmed by reading @xyflow/system's source,
+│           │                         #   not assumed). BlockCanvas.test.tsx interactions use
+│           │                         #   fireEvent.click, not userEvent.click — RF's pane/
+│           │                         #   nodes carry native d3-drag/d3-zoom mousedown
+│           │                         #   listeners that throw on jsdom's synthetic events
+│           └── setup.ts
 │
 └── design_handoff_blocknet_extension/   # reference only — KEEP-surfaces per its README
 ```

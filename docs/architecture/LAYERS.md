@@ -29,6 +29,7 @@ flowchart TB
         L3a["analysis-runner.ts"]
         L3b["cache-bridge.ts"]
         L3c["watcher.ts"]
+        L3d["webview-html.ts"]
     end
     subgraph L4["Layer 4 — extension/src: VS Code host glue"]
         direction LR
@@ -42,8 +43,8 @@ flowchart TB
     subgraph L5["Layer 5 — extension/webview/src: pure renderer"]
         direction LR
         L5a["flow/"]
-        L5b["state/"]
-        L5c["ui/"]
+        L5b["ui/"]
+        L5c["fixtures/"]
     end
 
     L0 --> L1 --> L2 --> L3 --> L4 --> L5
@@ -54,10 +55,10 @@ flowchart TB
 | 0 | npm deps | n/a | — | — |
 | 1 | `core/src/{blocks,edges,risks,cache}` | **No** — enforced by `core/test/no-vscode-import.test.ts` | `@blocknet/core` | Checkpoint B (`blocks/`, `edges/` truth validated earlier at Checkpoint A; `risks/`, `cache/` are built after A, in Tasks 4–5) |
 | 2 | `core/src/{analyze,cli,ipc-worker}.ts` | **No** | `@blocknet/core` | `analyze.ts`/`cli.ts` at Checkpoint B; `ipc-worker.ts` ships with Task 6, alongside `analysis-runner.ts` (`docs/planning/PROGRESS.md`) |
-| 3 | `extension/src/{analysis-runner,cache-bridge,change-buffer}.ts` | **No** — deliberately kept vscode-free (unlike this table originally assumed) so the fork lifecycle, generation-id bookkeeping, and debounce-classification logic are unit-testable headlessly, same posture as Layers 1–2 | `@blocknet/extension` | Task 6 (`docs/planning/PROGRESS.md`) |
+| 3 | `extension/src/{analysis-runner,cache-bridge,change-buffer,webview-html}.ts` | **No** — deliberately kept vscode-free (unlike this table originally assumed) so the fork lifecycle, generation-id bookkeeping, debounce-classification, and built-HTML transformation logic are all unit-testable headlessly, same posture as Layers 1–2. `webview-html.ts` (Task 7) takes `panel.ts`'s vscode-derived strings (`webview.cspSource`, `webview.asWebviewUri(...)` results) as plain parameters rather than the `vscode.Webview` object itself | `@blocknet/extension` | Task 6 for the first three (`docs/planning/PROGRESS.md`); `webview-html.ts` ships with Task 7 |
 | 3b | `extension/src/watcher.ts` | Yes — the thin `FileWatcher` shell wiring `vscode.workspace.createFileSystemWatcher` into `change-buffer.ts`; not unit-tested, verified manually via F5 | `@blocknet/extension` | Task 6 |
 | 4 | `extension/src/{extension,panel}.ts`, `commands/show-architecture.ts` | Yes | `@blocknet/extension` | Task 6 ships these three; `state.ts` (Task 8, workspaceState positions), `git.ts` and `commands/open-file.ts` (Task 9) land later — full layer clears at Checkpoint C |
-| 5 | `extension/webview/src/**` | **No** — only `acquireVsCodeApi()` | `@blocknet/extension` (own build) | Checkpoint C |
+| 5 | `extension/webview/src/**` | **No** — will be only `acquireVsCodeApi()` once Task 8 wires it; Task 7's build has zero vscode coupling of any kind, including that | `@blocknet/webview` — its own npm workspace/package (unlike this table originally assumed under `@blocknet/extension`), own `vite build`, consumed by `panel.ts` as a built artifact under `extension/webview/dist/` | Checkpoint C |
 
 ## The rule this enforces
 
