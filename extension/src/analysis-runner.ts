@@ -1,5 +1,5 @@
 import { fork, type ChildProcess } from 'node:child_process';
-import type { GraphResult, Progress, WorkerMessage, WorkerRequest } from '@blocknet/core';
+import type { GraphResult, MicroGraphResult, Progress, WorkerMessage, WorkerRequest } from '@blocknet/core';
 
 export type AnalysisOutcome = { kind: 'success'; graph: GraphResult } | { kind: 'error'; message: string };
 
@@ -9,6 +9,14 @@ export type RunOptions = {
   changedFiles?: string[];
   onProgress?: (p: Progress) => void;
 };
+
+// v2.0 micro view (docs/planning/ROADMAP-V2.md) — a block double-click. cacheDir is required
+// (unlike macro's optional one): analyzeMicroBlock() has nothing to compute from without a
+// prior macro run's cache (core/src/analyze-micro.ts), so there's no meaningful "uncached
+// micro run" the way there's a meaningful "uncached macro run" for CLI/CI callers.
+export type MicroRunOptions = { rootDir: string; cacheDir: string; blockId: string };
+
+export type MicroOutcome = { kind: 'success'; micro: MicroGraphResult } | { kind: 'error'; message: string };
 
 /** Owns the forked child-process lifecycle for one-shot analyze() runs (decisions/0011): fork
  * → one request in → progress messages + one result/error out → caller kills the child.
@@ -28,6 +36,12 @@ export type RunOptions = {
  * can be unit-tested against the real forked worker without needing to *be* bundled first). */
 export class AnalysisRunner {
   #latestGeneration = 0;
+  // Independent generation counter/namespace from macro's #latestGeneration above — a micro
+  // request (user-driven, one block double-click) must never be superseded by an unrelated
+  // macro re-analysis a file save happened to trigger concurrently, and vice versa. Sharing one
+  // counter across both streams would make an in-flight micro view request get silently
+  // discarded by a routine save-triggered macro re-analysis with nothing to do with it.
+  #latestMicroGeneration = 0;
   #children = new Set<ChildProcess>();
 
   constructor(private readonly workerPath: string) {}
@@ -43,6 +57,7 @@ export class AnalysisRunner {
     this.#children.add(child);
 
     const request: WorkerRequest = {
+      mode: 'macro',
       rootDir: options.rootDir,
       ...(options.cacheDir !== undefined && { cacheDir: options.cacheDir }),
       ...(options.changedFiles !== undefined && { changedFiles: options.changedFiles }),
@@ -61,8 +76,16 @@ export class AnalysisRunner {
           if (this.isLatest(generation)) options.onProgress?.(message);
         } else if (message.type === 'result') {
           settle({ kind: 'success', graph: message.graph });
-        } else {
+        } else if (message.type === 'error') {
           settle({ kind: 'error', message: message.message });
+        } else {
+          // 'micro-result' is unreachable on this stream — this fork only ever receives the
+          // 'macro' request built above, and ipc-worker.ts only ever sends 'micro-result' in
+          // response to a 'micro' request. Handled anyway (not a `never`-typed fallthrough)
+          // because WorkerMessage is shared across both streams, so the type system can't
+          // encode "this fork's request mode" on its own — the same defensive-exhaustiveness
+          // posture App.tsx's HostMessage switch already established.
+          settle({ kind: 'error', message: `unexpected message type "${message.type}" on the macro analysis stream` });
         }
       });
       child.on('error', (err) => {
@@ -90,6 +113,52 @@ export class AnalysisRunner {
    * silently discard it as superseded (FLOWS.md §2a). */
   isLatest(generation: number): boolean {
     return generation === this.#latestGeneration;
+  }
+
+  /** Forks a fresh worker for a single block's on-demand micro (file-level) graph
+   * (docs/planning/ROADMAP-V2.md's v2.0). Same one-shot fork lifecycle as run() above, gated by
+   * its own independent generation counter (#latestMicroGeneration) — see that field's own
+   * comment for why this can't share run()'s counter. Does not queue behind an in-flight micro
+   * request either, matching run()'s own "a second call gets a second, independent worker"
+   * behavior: diving into block B while block A's request is still in flight is a normal user
+   * action (backed out, picked a different block), not a rare race to special-case. */
+  runMicro(options: MicroRunOptions): { generation: number; result: Promise<MicroOutcome> } {
+    const generation = ++this.#latestMicroGeneration;
+    const child = fork(this.workerPath, [], { stdio: 'pipe' });
+    this.#children.add(child);
+
+    const request: WorkerRequest = { mode: 'micro', rootDir: options.rootDir, cacheDir: options.cacheDir, blockId: options.blockId };
+
+    const result = new Promise<MicroOutcome>((settle) => {
+      child.on('message', (message: WorkerMessage) => {
+        if (message.type === 'micro-result') {
+          settle({ kind: 'success', micro: message.micro });
+        } else if (message.type === 'error') {
+          settle({ kind: 'error', message: message.message });
+        }
+        // 'progress' is never sent for a micro request (ipc-worker.ts's runMicro doesn't call
+        // onProgress) — no branch needed here, unlike run()'s handler above.
+      });
+      child.on('error', (err) => {
+        settle({ kind: 'error', message: err.message });
+      });
+      child.on('exit', (code, signal) => {
+        settle({ kind: 'error', message: `worker exited before finishing (code ${code}, signal ${signal})` });
+      });
+      child.send(request);
+    }).finally(() => {
+      this.#children.delete(child);
+      child.kill();
+    });
+
+    return { generation, result };
+  }
+
+  /** True if `generation` is still the most recently started micro run — the micro-stream
+   * counterpart to isLatest() above, checked against #latestMicroGeneration, never
+   * #latestGeneration. */
+  isLatestMicro(generation: number): boolean {
+    return generation === this.#latestMicroGeneration;
   }
 
   /** Kills every still-running forked worker. Call on extension deactivate() / panel disposal
