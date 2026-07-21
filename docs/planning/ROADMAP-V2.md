@@ -136,6 +136,13 @@ pretty-picture territory (the Gource trap). Funnel, not tool.
   both before committing; blocks stay the primitive (legibility beat beauty in the v1 call).
 - Monetization: free OSS now (AD-10); freemium (paid AI/team features) is the natural line
   *if* retention proves out — decide on data, not upfront.
+- **Draggable/bendable edge routing** (Krish, 2026-07-21): manual waypoints a user can drag
+  onto an edge, so a large/messy real-repo graph (dozens of blocks, tangled crossings) can be
+  manually decluttered rather than staying stuck with whatever the auto-layout (dagre, AD-7)
+  produced. Not scoped yet — needs its own design pass (where do waypoints persist? per-user
+  `workspaceState` alongside node positions, presumably, following `state.ts`'s existing
+  sparse-override pattern — but that's a guess, not a decision). Natural fit once the graph
+  is otherwise stable; low priority relative to v2.0's micro view.
 
 ---
 
