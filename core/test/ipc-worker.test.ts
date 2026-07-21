@@ -30,9 +30,9 @@ function writeText(path: string, contents: string) {
 }
 
 /** Forks the real worker, sends one request, and collects every message up to and including
- * the first 'result' or 'error', then kills the worker — mirroring the one-shot fork → one
- * message in → one message out → kill lifecycle ADR-0011 specifies (analysis-runner.ts, not
- * the worker itself, is responsible for the kill). */
+ * the first terminal one ('result'/'micro-result'/'error'), then kills the worker — mirroring
+ * the one-shot fork → one message in → one message out → kill lifecycle ADR-0011 specifies
+ * (analysis-runner.ts, not the worker itself, is responsible for the kill). */
 async function runWorker(request: WorkerRequest): Promise<WorkerMessage[]> {
   const child = fork(workerPath, [], { stdio: 'pipe' });
   const messages: WorkerMessage[] = [];
@@ -42,7 +42,7 @@ async function runWorker(request: WorkerRequest): Promise<WorkerMessage[]> {
       const timeout = setTimeout(() => reject(new Error('worker did not respond within 5s')), 5000);
       child.on('message', (message: WorkerMessage) => {
         messages.push(message);
-        if (message.type === 'result' || message.type === 'error') {
+        if (message.type === 'result' || message.type === 'micro-result' || message.type === 'error') {
           clearTimeout(timeout);
           resolvePromise(messages);
         }
@@ -69,7 +69,7 @@ describe('ipc-worker', () => {
     writeText(resolve(root, 'package.json'), JSON.stringify({ name: 'worker-test-repo' }));
     writeText(resolve(root, 'src/pkgA/index.ts'), 'export const a = 1;\n');
 
-    const messages = await runWorker({ rootDir: root });
+    const messages = await runWorker({ mode: 'macro', rootDir: root });
     const result = messages.at(-1);
 
     expect(result?.type).toBe('result');
@@ -84,7 +84,7 @@ describe('ipc-worker', () => {
     writeText(resolve(root, 'package.json'), JSON.stringify({ name: 'worker-test-repo' }));
     writeText(resolve(root, 'src/pkgA/index.ts'), 'export const a = 1;\n');
 
-    const messages = await runWorker({ rootDir: root });
+    const messages = await runWorker({ mode: 'macro', rootDir: root });
     const progressPhases = messages.filter((m) => m.type === 'progress').map((m) => (m.type === 'progress' ? m.phase : null));
 
     expect(progressPhases).toEqual(['blocks', 'edges', 'risks', 'cache']);
@@ -97,8 +97,8 @@ describe('ipc-worker', () => {
     writeText(resolve(root, 'src/pkgA/index.ts'), 'export const a = 1;\n');
     const cacheDir = resolve(root, '.cache');
 
-    await runWorker({ rootDir: root, cacheDir });
-    const second = await runWorker({ rootDir: root, cacheDir });
+    await runWorker({ mode: 'macro', rootDir: root, cacheDir });
+    const second = await runWorker({ mode: 'macro', rootDir: root, cacheDir });
     const result = second.at(-1);
 
     expect(result?.type).toBe('result');
@@ -110,13 +110,55 @@ describe('ipc-worker', () => {
   it('sends an error message (not an uncaught crash) when analyze() rejects', async () => {
     const nonExistentRoot = resolve(tmpdir(), 'blocknet-ipc-worker-test-does-not-exist');
 
-    const messages = await runWorker({ rootDir: nonExistentRoot });
+    const messages = await runWorker({ mode: 'macro', rootDir: nonExistentRoot });
     const last = messages.at(-1);
 
     expect(last?.type).toBe('error');
     if (last?.type === 'error') {
       expect(typeof last.message).toBe('string');
       expect(last.message.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('mode: micro sends a micro-result message with the requested block\'s files', async () => {
+    const root = createTempRepo();
+    writeText(resolve(root, 'package.json'), JSON.stringify({ name: 'worker-test-repo' }));
+    writeText(resolve(root, 'src/pkgA/index.ts'), 'export const a = 1;\n');
+    const cacheDir = resolve(root, '.cache');
+
+    await runWorker({ mode: 'macro', rootDir: root, cacheDir });
+    const messages = await runWorker({ mode: 'micro', rootDir: root, cacheDir, blockId: 'src/pkgA' });
+    const result = messages.at(-1);
+
+    expect(result?.type).toBe('micro-result');
+    if (result?.type === 'micro-result') {
+      expect(result.micro.blockId).toBe('src/pkgA');
+      expect(result.micro.files.map((f) => f.id)).toEqual(['src/pkgA/index.ts']);
+    }
+  });
+
+  it('mode: micro sends no progress messages (unlike macro)', async () => {
+    const root = createTempRepo();
+    writeText(resolve(root, 'package.json'), JSON.stringify({ name: 'worker-test-repo' }));
+    writeText(resolve(root, 'src/pkgA/index.ts'), 'export const a = 1;\n');
+    const cacheDir = resolve(root, '.cache');
+
+    await runWorker({ mode: 'macro', rootDir: root, cacheDir });
+    const messages = await runWorker({ mode: 'micro', rootDir: root, cacheDir, blockId: 'src/pkgA' });
+
+    expect(messages.filter((m) => m.type === 'progress')).toEqual([]);
+  });
+
+  it('mode: micro sends a structured error (not a hang) when no cache exists yet', async () => {
+    const root = createTempRepo();
+    const cacheDir = resolve(root, '.cache-never-written');
+
+    const messages = await runWorker({ mode: 'micro', rootDir: root, cacheDir, blockId: 'src/pkgA' });
+    const last = messages.at(-1);
+
+    expect(last?.type).toBe('error');
+    if (last?.type === 'error') {
+      expect(last.message).toContain('src/pkgA');
     }
   });
 });
