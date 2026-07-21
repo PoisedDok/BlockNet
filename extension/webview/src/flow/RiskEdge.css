@@ -27,6 +27,19 @@
 }
 
 .bn-edge[data-selected] .bn-edge-line {
+  /* Explicit, not inherited from the unselected `.bn-edge-line` rule above — a real,
+     live-caught bug: React Flow's own base stylesheet ships
+     `.react-flow__edge.selected .react-flow__edge-path { stroke: #555 }`, the SAME (0,3,0)
+     specificity as the unselected rule this used to rely on, so which one actually painted
+     depended on CSS import order (RiskEdge.css vs. @xyflow/react/dist/style.css) — accidental,
+     fragile, and it lost: every selected edge (risk or not) rendered React Flow's gray
+     instead of ours the moment it was clicked, silently undermining "red = risk" the instant
+     a user did the one thing this whole tool exists for them to do. Declaring `stroke` here
+     explicitly gives this rule (.bn-edge[data-selected] .bn-edge-line, specificity 0,3,0 — no
+     higher, but see the risk-selected rule below for why THAT one needs to unconditionally
+     win) the same fix applied consistently; combined with the risk-specific override below,
+     neither state depends on import order anymore. */
+  stroke: var(--bn-text-primary);
   stroke-width: 2.6px;
   filter: drop-shadow(0 0 6px color-mix(in srgb, var(--bn-text-primary) 50%, transparent));
 }
@@ -39,6 +52,12 @@
 }
 
 .bn-edge[data-risk][data-selected] .bn-edge-line {
+  /* Explicit `stroke` here too, for the same reason as `.bn-edge[data-selected]` above — and
+     here it's not just parity, it's the fix that actually matters: this selector's higher
+     specificity (0,4,0 — one more attribute selector than either the unselected risk rule or
+     React Flow's own selected-edge rule) means declaring it here wins outright regardless of
+     CSS import order, rather than depending on a tie-break that already broke once. */
+  stroke: var(--bn-risk);
   stroke-width: 2.8px;
   filter: drop-shadow(0 0 7px var(--bn-risk-glow));
 }
@@ -51,6 +70,16 @@
   fill: var(--bn-risk);
 }
 
+/* Purely decorative (already aria-hidden) — must never intercept a pointer event meant for
+   `.bn-edge-grab` underneath. A real, live-caught bug: the badge renders at the edge's own
+   mx/my, which for an UNBENT edge is the exact natural midpoint — precisely the point a user
+   is most likely to press down on first to start a drag. Without this, the SVG `<text>`
+   element (its own default pointer-events, non-none) silently ate the pointerdown meant for
+   the grab path sitting right underneath it, at exactly the spot most likely to be tried. */
+.bn-edge-badge {
+  pointer-events: none;
+}
+
 .bn-edge-badge-circle {
   fill: color-mix(in srgb, var(--bn-risk) 12%, var(--bn-canvas-bg) 88%);
   stroke: var(--bn-risk);
@@ -60,4 +89,82 @@
 .bn-edge-badge-text {
   fill: var(--bn-risk);
   font: 700 12px var(--bn-font-mono);
+}
+
+/* Multi-point drag parity (ROADMAP-V2.md): the invisible "grab the line directly" hit target
+   — same `d` as the visible BaseEdge path, rendered as a sibling within the same `<g>` so it
+   inherits the edge's own opacity/dimming, wide enough to be a comfortable target without
+   feeling like a separate widget the way the original single, separately-positioned handle
+   dot did. `fill: none` is required for an SVG path with no area to have anything to hit-test
+   in the first place — a stroke-only path's default `pointer-events: visiblePainted` ignores
+   a transparent stroke entirely, so this is set explicitly via `stroke` (not left to the
+   `bn-edge` group's own CSS) rather than assumed. */
+.bn-edge-grab {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 22px;
+  cursor: grab;
+}
+
+.bn-edge-grab:active {
+  cursor: grabbing;
+}
+
+/* React Flow's own fixed internal DOM order inside `.react-flow__viewport` is: `.react-flow__
+   edges` → `.react-flow__edgelabel-renderer` (where WaypointHandle's div actually lives, via
+   EdgeLabelRenderer) → `.react-flow__nodes`, all three at the library's own default
+   `z-index: auto` — meaning EVERY block node card paints ABOVE every edge label by construction,
+   not by coincidence. Confirmed live via Playwright against the ?sample=1 fixture: a drag on a
+   real risky edge's handle (`web-db`, whose natural midpoint happens to sit under the `ui`
+   block's card in this fixture's specific layout) silently did nothing at all — the card, not
+   the handle, received every pointer event. This isn't a rare fixture quirk: any edge whose
+   midpoint (or current waypoint) visually falls under an unrelated node — routine for an edge
+   connecting two non-adjacent blocks in a real, compact layout — hits the identical gap. An
+   explicit z-index on the whole edgelabel-renderer layer (React Flow doesn't expose a narrower
+   way to reorder just this one layer) reliably wins over both siblings' `auto` stacking. */
+.react-flow__edgelabel-renderer {
+  z-index: 1000;
+}
+
+/* Multi-point drag parity (ROADMAP-V2.md). Renders through EdgeLabelRenderer (RiskEdge.tsx's
+   WaypointHandle) — a real HTML div in React Flow's shared overlay layer, NOT an SVG circle
+   nested inside this edge's own `<g>`. That matters for this rule's own selectors: a portal
+   moves the rendered element to a DIFFERENT part of the DOM tree, so
+   `.bn-edge:hover .bn-edge-waypoint-handle`-style descendant selectors (which would have
+   worked for an inline SVG circle) can never match here — the React component tree still
+   looks nested, but the live DOM isn't.
+   One of these renders per CONFIRMED waypoint only — there is no permanent "ghost" handle at
+   an edge's natural midpoint before any bend exists (unlike the original single-waypoint
+   design, which always rendered one). `.bn-edge-grab` above is the affordance for creating a
+   NEW bend anywhere along the line; this handle exists purely to grab and move (or remove, by
+   dragging back onto the straight line between its neighbors) an ALREADY-PLACED point
+   precisely. Consequently there's no more separate "at rest" vs. "bent" visual state to
+   distinguish (every rendered handle already represents a real bend) — a single, consistently
+   visible opacity for both risk and non-risk edges, matching the "same premium draggability"
+   requirement directly: only the color differs (via [data-risk]), never size, opacity, or
+   position-relative-to-the-line — the original version's risk-only vertical offset (to dodge
+   the "!" badge) is gone entirely, since a handle only ever exists where the user actually put
+   it, not fixed at the midpoint the badge also occupies before any bend. */
+.bn-edge-waypoint-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--bn-text-primary);
+  opacity: 0.85;
+  cursor: grab;
+  transition: opacity 0.15s ease;
+  pointer-events: all;
+}
+
+.bn-edge-waypoint-handle:hover {
+  opacity: 1;
+}
+
+.bn-edge-waypoint-handle[data-risk] {
+  background: var(--bn-risk);
+}
+
+.bn-edge-waypoint-handle:active {
+  cursor: grabbing;
 }
