@@ -15,7 +15,7 @@ const rawHtml = `<!doctype html>
 </html>
 `;
 
-const params = { rawHtml, baseHref: 'https://webview-uri.example/webview/dist/', cspSource: 'https://webview-uri.example', nonce: 'test-nonce-123' };
+const params = { rawHtml, baseHref: 'https://webview-uri.example/webview/dist/', cspSource: 'https://webview-uri.example', nonce: 'test-nonce-123', generation: 'gen-abc' };
 
 describe('buildReadyHtml', () => {
   it('injects a <base> tag pointing at the webview dist URI', () => {
@@ -45,6 +45,15 @@ describe('buildReadyHtml', () => {
   it('preserves the rest of the document (root div) untouched', () => {
     const html = buildReadyHtml(params);
     expect(html).toContain('<div id="root"></div>');
+  });
+
+  it('injects a meta tag carrying the generation id, for the ready-handshake race fix', () => {
+    // panel.ts's whenReady() must be able to tell a stale 'webview/ready' (posted by a script
+    // instance a later createOrReveal() call already superseded) apart from the one it's
+    // actually waiting for — see panel.ts's own comment on #currentGeneration. The webview
+    // reads this meta tag and echoes its value back in the webview/ready message.
+    const html = buildReadyHtml(params);
+    expect(html).toContain('<meta name="blocknet-generation" content="gen-abc">');
   });
 
   it('adds the nonce to every <script type="module"> tag, not just the first', () => {
