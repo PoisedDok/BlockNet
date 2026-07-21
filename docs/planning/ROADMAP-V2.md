@@ -27,6 +27,10 @@ v1 ships the macro layer of that. The rest lands in this order:
 
 ## v2.0 — Micro view: dive into a block (the very next thing)
 
+**Status: shipped 2026-07-21** — see `docs/planning/PROGRESS-V2.md` for what was built, the
+two-pass review findings, and live-verification results. v2.1 (Connection Inspector) is next
+per this doc's own promotion order.
+
 **What:** Double-click a block → cross-fade (~0.45–0.5s scale+opacity, per prototype) to
 its file-level graph: file cards with real **LOC**, **`● edited`** git-dirty marker, ⚠ risk
 pill, ⤢ split-screen open. Intra-block import edges. Breadcrumb `System Map / <block>`,
@@ -41,11 +45,71 @@ node count 10–100× and needs its own perf work (possibly d3-force organic lay
 the "Gource look" belongs at this layer if anywhere; sigma.js/graphology if file counts
 demand WebGL).
 
+## v2.0.1 — Directory-tree micro view: folders drill down too (Krish, 2026-07-21, before v2.1)
+
+**Status:** planned, not started. Placed before v2.1 deliberately — it reshapes the model
+v2.1's Connection Inspector gets built against, so building the inspector first would mean
+rebuilding it immediately after this lands.
+
+**The gap this closes:** v2.0 shipped a FLAT per-block file list — confirmed by reading the
+current code: `core/src/analyze-micro.ts`'s `filesForBlock()` walks the WHOLE subtree under a
+block and returns every file as one flat `MicroFileNode[]` regardless of nesting depth;
+`MicroFileNode` (`core/src/types.ts`) carries a `path` field but nothing that groups files by
+directory; `extension/webview/src/flow/file-layout.ts`'s `layoutFiles()` never reads that
+`path` — every file becomes one sibling dagre node, positioned purely by import edges. There
+is no locked decision behind this (checked every ADR in `docs/decisions/` — none address
+directory nesting in the micro view); it's an implementation gap in what v2.0 built, not a
+reversal of one.
+
+**What:** Diving into a block (or a folder one level down) shows its DIRECT children only:
+each subdirectory renders as its own drillable folder card (visually block-like, same
+double-click-to-dive interaction as a macro block), each direct-child file renders as a file
+leaf card exactly as today. Diving into a folder card recurses the identical view one level
+deeper. Breadcrumb generalizes from the current fixed `System Map / <block>` to an arbitrary-
+depth trail (`System Map / <block> / <folder> / <folder> / ...`), each segment clickable to
+jump back to that exact level — not just one "← zoom out" step.
+
+**Cross-layer connections (the other half of this item):** an import can cross from a file
+several folders deep to a file that isn't a direct child of the currently-displayed layer
+(an ancestor folder's own file, a cousin branch's file, etc.). Each layer must render that as
+a visible "this connects to something outside this view" indicator — a faded/dashed stub
+edge at the boundary of the layer, distinct from a normal in-layer edge — so a user can see
+the connection exists and navigate (click the stub, or a breadcrumb segment) toward the real
+endpoint, rather than the edge silently vanishing because its other end isn't on screen.
+Exact visual treatment (edge stub vs. a small connection-count badge on the breadcrumb
+segment vs. something else) is UNDECIDED — needs a short design pass, not full-specced here;
+what's locked is the requirement itself (every cross-layer connection must be visible from
+both layers it touches, never silently dropped).
+
+**Engine implications (traced, not designed):** the repo-wide `FileEdge[]` `analyze()` already
+produces has every edge regardless of which folder either endpoint lives in — resolving "is
+this edge's other endpoint inside or outside the current layer" is a scoping/filtering
+question against data that already exists, not new import-extraction work. What's missing is
+a grouping concept above `MicroFileNode` (a folder-level node) and a query answering "for this
+exact folder scope, which edges stay fully inside vs. cross the boundary."
+
+**State implications (flagged, not designed):** `GraphView.tsx`'s view-state is currently a
+fixed 3-phase machine, `'macro' | 'diving' | 'micro'` — one level of micro, hardcoded. This
+generalizes to an arbitrary-depth stack of active path segments. `blocknet.filePositions` /
+`blocknet.fileEdgeWaypoints` (`extension/src/state.ts`) are currently scoped per BLOCK — an
+arbitrary-depth model needs these scoped per exact folder path instead, or two files in
+different subfolders could collide on the same relative node id. Needs real design before
+implementation; not decided here.
+
+**Why this order:** v2.1's Connection Inspector (below) should open from ANY edge click,
+including a cross-layer stub — sequencing this first means the inspector is built once,
+against the real model, not once against a flat model and again after this lands.
+
 ## v2.1 — Connection Inspector (unique surface, keep from prototype)
 
 **What:** Click an edge → docked panel: `source → target`, risk tag + one-liner, and **both
 endpoint files side-by-side** with the import lines emphasized. "Open both" → two real
-editor columns. "Ask Copilot ↗" forwards the connection to chat (once v2.2 lands).
+editor columns. "Ask Copilot ↗" forwards the connection to chat (once v2.2 lands). Extends to
+v2.0.1's cross-layer stub edges too, once that lands — clicking a stub opens the same panel,
+resolving the off-screen endpoint on demand rather than requiring the user to navigate there
+first. Risk tag renders in the same red used everywhere else in this app for structural risk
+(`#ef4444` per the existing edge/badge styling, `RiskEdge.css`) — one visual language for
+"this connection is flagged," not a second one invented for this panel.
 
 **Engine:** consumes `Risk.evidence` (file, line, statement) which v1's schema already
 carries — designed forward on purpose. Host resolves edge → endpoint ranges on demand.
@@ -136,13 +200,19 @@ pretty-picture territory (the Gource trap). Funnel, not tool.
   both before committing; blocks stay the primitive (legibility beat beauty in the v1 call).
 - Monetization: free OSS now (AD-10); freemium (paid AI/team features) is the natural line
   *if* retention proves out — decide on data, not upfront.
-- **Draggable/bendable edge routing** (Krish, 2026-07-21): manual waypoints a user can drag
-  onto an edge, so a large/messy real-repo graph (dozens of blocks, tangled crossings) can be
-  manually decluttered rather than staying stuck with whatever the auto-layout (dagre, AD-7)
-  produced. Not scoped yet — needs its own design pass (where do waypoints persist? per-user
-  `workspaceState` alongside node positions, presumably, following `state.ts`'s existing
-  sparse-override pattern — but that's a guess, not a decision). Natural fit once the graph
-  is otherwise stable; low priority relative to v2.0's micro view.
+- **Draggable/bendable edge routing** (Krish, 2026-07-21): ✅ shipped 2026-07-21, same day as
+  scoped, then revised same session from a single fixed midpoint to full **multi-point**
+  routing — grab the line anywhere to drop a new bend, drag any existing bend, drag one back
+  near the straight line between its neighbors to remove it. Each handle is rendered through
+  React Flow's `EdgeLabelRenderer`; the full waypoint array persists in
+  `context.workspaceState` (`blocknet.edgeWaypoints`, macro; `blocknet.fileEdgeWaypoints`,
+  micro) via the `state.ts` sparse-override pattern this note originally guessed at. See
+  `docs/planning/PROGRESS-V2.md` for the full build record, including seven real bugs found
+  via live Playwright testing and two further architectural-review passes. The
+  coincident-midpoint limitation this note originally accepted is CLOSED, not just noted:
+  `graph-derive.ts`'s `siblingOffsets()` now gives every edge between the same node pair
+  (either direction) a distinct, stable rendering offset before any waypoint exists, so two
+  reciprocal edges never render as literally overlapping curves.
 
 ---
 

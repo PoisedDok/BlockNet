@@ -4,12 +4,15 @@ Render a TS/JS repository's block-level architecture graph — accurately and fa
 import cycles and one boundary violation flagged, inside a VS Code webview that sits beside
 the editor.
 
-> **Status: pre-release, Tasks 1–9 of 10 done.** Checkpoint A (real-repo truth gate) and
-> Checkpoint B (engine complete, schema frozen) have both passed. The engine (`core/`) and the
-> VS Code extension (host + webview) are built and tested; only Task 10 (packaging/publishing)
-> remains — see [`docs/planning/PROGRESS.md`](docs/planning/PROGRESS.md) for exactly what's
-> done vs. pending, and [`docs/architecture/LAYERS.md`](docs/architecture/LAYERS.md) for why UI
-> work didn't start until the engine was validated.
+> **Status: pre-release.** v1 (Tasks 1–9 of 10) is done — Checkpoint A (real-repo truth gate)
+> and Checkpoint B (engine complete, schema frozen) have both passed, and the engine (`core/`)
+> plus the VS Code extension (host + webview) are built and tested. v1's Task 10
+> (packaging/publishing) is deliberately not next: v2 is being built first — see
+> [`docs/planning/ROADMAP-V2.md`](docs/planning/ROADMAP-V2.md) for the full backlog and
+> [`docs/planning/PROGRESS-V2.md`](docs/planning/PROGRESS-V2.md) for what's shipped so far
+> (v2.0, the micro/file-level view). [`docs/planning/PROGRESS.md`](docs/planning/PROGRESS.md)
+> has v1's own build record, and [`docs/architecture/LAYERS.md`](docs/architecture/LAYERS.md)
+> explains why UI work didn't start until the engine was validated.
 
 ## What this is
 
