@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { Edge, Risk } from '@blocknet/core';
 import type { WebviewBlockNode } from '../../src/shared/protocol.js';
@@ -131,6 +131,20 @@ describe('BlockCanvas', () => {
     const authCard = screen.getByText('auth').closest('.bn-card') as HTMLElement;
     expect(gatewayCard.querySelector('.bn-card-dirty')).not.toBeNull();
     expect(authCard.querySelector('.bn-card-dirty')).toBeNull();
+  });
+
+  it('calls onBlockDoubleClick with the block id on a real double-click', () => {
+    const onBlockDoubleClick = vi.fn();
+    const nodes = [block('gateway'), block('auth')];
+    render(<BlockCanvas nodes={nodes} edges={[]} onBlockDoubleClick={onBlockDoubleClick} />);
+    fireEvent.doubleClick(screen.getByText('gateway'));
+    expect(onBlockDoubleClick).toHaveBeenCalledWith('gateway');
+  });
+
+  it('does not throw when a node is double-clicked and no onBlockDoubleClick is supplied', () => {
+    const nodes = [block('gateway')];
+    render(<BlockCanvas nodes={nodes} edges={[]} />);
+    expect(() => fireEvent.doubleClick(screen.getByText('gateway'))).not.toThrow();
   });
 
   it('renders 30 blocks and 100 edges without throwing (stress fixture size)', () => {

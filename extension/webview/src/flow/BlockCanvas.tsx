@@ -6,7 +6,7 @@ import type { WebviewBlockNode } from '../../../src/shared/protocol.js';
 import { BlockNode, type BlockNodeType } from './BlockNode.js';
 import { RiskEdge, type RiskEdgeType } from './RiskEdge.js';
 import { layoutBlocks, type Position } from './layout.js';
-import { relatedIds, connectionCounts, type Selection } from './graph-derive.js';
+import { relatedIds, connectionCounts, siblingOffsets, type Selection } from './graph-derive.js';
 import { blockAriaLabel } from './block-label.js';
 import { useCameraStore } from '../camera-store.js';
 import { StatusBar } from '../ui/StatusBar.js';
@@ -32,7 +32,16 @@ export type BlockCanvasProps = {
   /** Sparse, restored-from-workspaceState positions (docs/architecture/PROTOCOL.md's
    * layout/restore) — ids absent here fall through to a fresh dagre position. Defaults to
    * empty for callers (tests, the stress fixture) that don't care about persistence. */
-  initialPositions?: Record<string, Position>;
+  initialPositions?: Record<string, Position> | undefined;
+  /** ROADMAP-V2.md's multi-point draggable/bendable edge routing — same sparse-override
+   * contract as initialPositions, each present value an ORDERED array of zero-or-more bend
+   * points (edge-path.ts). Defaults to empty for callers (tests, the stress fixture) that
+   * don't care about persistence. */
+  initialEdgeWaypoints?: Record<string, Position[]> | undefined;
+  /** v2.0 micro view (docs/planning/ROADMAP-V2.md) — a block double-click. Optional so every
+   * existing caller (tests, the dev/QA fixtures without a host round-trip wired up) keeps
+   * working unchanged; GraphView.tsx is the one real caller that supplies it. */
+  onBlockDoubleClick?: ((blockId: string) => void) | undefined;
 };
 
 export function BlockCanvas(props: BlockCanvasProps) {
@@ -43,11 +52,11 @@ export function BlockCanvas(props: BlockCanvasProps) {
   );
 }
 
-function BlockCanvasInner({ nodes, edges, initialPositions }: BlockCanvasProps) {
+function BlockCanvasInner({ nodes, edges, initialPositions, initialEdgeWaypoints, onBlockDoubleClick }: BlockCanvasProps) {
   const [selection, setSelection] = useState<Selection>(null);
   // Only a persistence side-channel now (debounces layout/persist to the host) — no longer
   // read to derive flowNodes' rendered position. See flowNodes' own comment for why.
-  const { movePosition } = useCameraStore(initialPositions ?? {});
+  const { movePosition, edgeWaypoints, moveWaypoints } = useCameraStore(initialPositions ?? {}, initialEdgeWaypoints ?? {});
   const { zoomIn, zoomOut, fitView } = useReactFlow();
   const { zoom } = useViewport();
 
@@ -110,6 +119,13 @@ function BlockCanvasInner({ nodes, edges, initialPositions }: BlockCanvasProps) 
     });
   }, [baseFlowNodes]);
 
+  // Two edges between the SAME pair of nodes (either direction — a reciprocal A→B/B→A import
+  // cycle is exactly this, the single most common real-world risk pattern this tool flags)
+  // otherwise render as literally coincident curves — see graph-derive.ts's own comment for
+  // why that's a real, live-caught interaction bug (a drag aimed at one edge silently grabbing
+  // the OTHER), not just a cosmetic overlap.
+  const edgeSiblingOffsets = useMemo(() => siblingOffsets(edges), [edges]);
+
   const flowEdges: RiskEdgeType[] = useMemo(() => {
     const mapped: RiskEdgeType[] = edges.map((e) => {
       const isRisk = !!e.risk;
@@ -121,7 +137,19 @@ function BlockCanvasInner({ nodes, edges, initialPositions }: BlockCanvasProps) 
         type: 'risk',
         selected: selection?.type === 'edge' && selection.id === e.id,
         ariaLabel: isRisk ? `${e.source} to ${e.target}, ${e.risk!.tag.toLowerCase()} risk: ${e.risk!.oneLine}` : `${e.source} to ${e.target}`,
-        data: { isRisk, dimmed },
+        // ROADMAP-V2.md's multi-point draggable/bendable edge routing: `waypoints` absent/
+        // empty means "no override, render the plain geometric curve" — RiskEdge.tsx's own
+        // contract. `onWaypointsChange` is what makes an edge's line grabbable at all (RiskEdge
+        // only renders the grab affordance/handles when this is present) — every macro AND
+        // micro edge gets one (FileCanvas.tsx's own flowEdges wires the identical thing), no
+        // macro-only carve-out.
+        data: {
+          isRisk,
+          dimmed,
+          ...(edgeWaypoints[e.id] !== undefined && { waypoints: edgeWaypoints[e.id] }),
+          onWaypointsChange: (waypoints: Position[]) => moveWaypoints(e.id, waypoints),
+          siblingOffset: edgeSiblingOffsets[e.id] ?? 0,
+        },
       };
     });
     // SVG has no z-index — paint (and therefore click-hit) order is DOM order, so an edge
@@ -133,7 +161,7 @@ function BlockCanvasInner({ nodes, edges, initialPositions }: BlockCanvasProps) 
     // real, reported friction on the 100-edge stress fixture: several risk edges were
     // effectively unclickable, buried under edges drawn after them.
     return [...mapped].sort((a, b) => Number(a.data?.isRisk ?? false) - Number(b.data?.isRisk ?? false));
-  }, [edges, selection, related]);
+  }, [edges, selection, related, edgeWaypoints, moveWaypoints, edgeSiblingOffsets]);
 
   const onNodeClick = useCallback<NodeMouseHandler>((_evt, node) => {
     setSelection((prev) => (prev?.type === 'node' && prev.id === node.id ? null : { type: 'node', id: node.id }));
@@ -144,6 +172,13 @@ function BlockCanvasInner({ nodes, edges, initialPositions }: BlockCanvasProps) 
   }, []);
 
   const onPaneClick = useCallback(() => setSelection(null), []);
+
+  const onNodeDoubleClick = useCallback<NodeMouseHandler>(
+    (_evt, node) => {
+      onBlockDoubleClick?.(node.id);
+    },
+    [onBlockDoubleClick],
+  );
 
   // applyNodeChanges handles every change type (dimension measurement, selection, position,
   // add/remove) rather than filtering to 'position' only, the earlier hand-rolled version's
@@ -187,6 +222,7 @@ function BlockCanvasInner({ nodes, edges, initialPositions }: BlockCanvasProps) 
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodeClick={onNodeClick}
+        onNodeDoubleClick={onNodeDoubleClick}
         onEdgeClick={onEdgeClick}
         onPaneClick={onPaneClick}
         onNodesChange={onNodesChange}
@@ -198,6 +234,18 @@ function BlockCanvasInner({ nodes, edges, initialPositions }: BlockCanvasProps) 
         selectionOnDrag={false}
         panOnDrag
         nodesConnectable={false}
+        // v2.0 micro view (docs/planning/ROADMAP-V2.md): a block double-click now dives into
+        // its file-level graph — React Flow's own zoomOnDoubleClick default (true) must be off,
+        // not just "also true," or it wins the same gesture. d3-zoom's dblclicked handler calls
+        // event.stopImmediatePropagation() before onNodeDoubleClick's bubbled synthetic event
+        // ever reaches React's root listener, so with the default left on, double-clicking a
+        // block silently zoomed the canvas and onBlockDoubleClick never fired at all — a real
+        // bug live Playwright verification against the real dev server caught (a double-click
+        // on a real node in a real browser exercises d3-zoom's actual attached listener; jsdom-
+        // based unit tests using fireEvent.doubleClick never do, which is exactly why this
+        // shipped past every unit test green and needed real-browser verification to surface —
+        // confirmed by reading d3-zoom's own noevent() helper, not just inferred from symptoms).
+        zoomOnDoubleClick={false}
       >
         <Background variant={BackgroundVariant.Dots} gap={26} size={1} color="var(--bn-grid-dot)" bgColor="var(--bn-canvas-bg)" />
         <Panel position="bottom-left">
