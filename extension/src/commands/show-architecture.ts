@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
-import type { AnalysisOutcome, AnalysisRunner } from '../analysis-runner.js';
+import type { AnalysisOutcome, AnalysisRunner, MicroOutcome } from '../analysis-runner.js';
 import { resolveCacheDir } from '../cache-bridge.js';
 import { dirtyBlockIds } from '../dirty-blocks.js';
 import { getDirtyFiles } from '../git.js';
 import { ArchitecturePanel } from '../panel.js';
-import { getPositions, setPositions } from '../state.js';
+import { getEdgeWaypoints, getFileEdgeWaypoints, getFilePositions, getPositions, setEdgeWaypoints, setFileEdgeWaypoints, setFilePositions, setPositions } from '../state.js';
 import type { WatcherTrigger } from '../watcher.js';
 import { FileWatcher } from '../watcher.js';
 import { handleOpenFile } from './open-file.js';
@@ -70,6 +70,49 @@ function triggerAnalysis(runner: AnalysisRunner, panel: ArchitecturePanel, optio
     });
 }
 
+/** Forks one micro (file-level) run for a single block double-click (docs/planning/
+ * ROADMAP-V2.md's v2.0). Same dual-generation gate as triggerAnalysis above — `runner.
+ * isLatestMicro()` (is this still the newest MICRO request? independent counter from macro's,
+ * see analysis-runner.ts's own comment) and `panel.isCurrentGeneration()` (is the webview
+ * script this would post into still the one actually listening?) — captured/checked the same
+ * way, because the identical stale-post race applies here too: a rapid second double-click
+ * before the first's forked worker returns must never let the first's late response land after
+ * the second's.
+ *
+ * Unlike triggerAnalysis, a failure here does NOT go through vscode.window.showErrorMessage —
+ * it's local to the block the user just dove into (a missing cache, a since-removed blockId),
+ * not a whole-panel failure, so it's posted back as `graph/micro/error` instead, letting the
+ * webview fall back to the macro view with an inline notice rather than a global toast plus a
+ * webview stuck mid-transition with nothing to correct it (PROTOCOL.md). */
+function triggerMicroAnalysis(runner: AnalysisRunner, panel: ArchitecturePanel, options: { rootDir: string; cacheDir: string; blockId: string }): void {
+  const panelGeneration = panel.currentGeneration;
+  const { generation, result } = runner.runMicro(options);
+
+  result
+    .then(async (outcome: MicroOutcome) => {
+      if (!runner.isLatestMicro(generation)) return;
+      if (outcome.kind === 'success') {
+        // Dirty markers (STATE-OWNERSHIP.md: queried live, never cached) — direct membership
+        // at file granularity, unlike dirty-blocks.ts's path-prefix aggregation for blocks;
+        // getDirtyFiles never throws (git.ts degrades to [] on any failure).
+        const dirtySet = new Set(await getDirtyFiles(options.rootDir));
+        const files = outcome.micro.files.map((f) => ({ ...f, dirty: dirtySet.has(f.id) }));
+        if (!runner.isLatestMicro(generation) || !panel.isCurrentGeneration(panelGeneration)) return;
+        panel.post({ type: 'graph/micro', blockId: outcome.micro.blockId, files, edges: outcome.micro.edges });
+      } else {
+        console.error(outcome.message);
+        if (!panel.isCurrentGeneration(panelGeneration)) return;
+        panel.post({ type: 'graph/micro/error', blockId: options.blockId, message: outcome.message.split('\n')[0] ?? outcome.message });
+      }
+    })
+    .catch((err: unknown) => {
+      if (!runner.isLatestMicro(generation) || !panel.isCurrentGeneration(panelGeneration)) return;
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(err);
+      panel.post({ type: 'graph/micro/error', blockId: options.blockId, message });
+    });
+}
+
 /** `blocknet.showArchitecture` — creates/reveals the panel (docs/architecture/FLOWS.md's
  * "cold analyze" and "incremental re-analyze" flows). No workspace or a multi-root workspace
  * are named, visible unsupported states (ENGINEERING-CONSTRAINTS.md) rendered in the panel
@@ -90,17 +133,19 @@ export function registerShowArchitectureCommand(context: vscode.ExtensionContext
     const folders = vscode.workspace.workspaceFolders;
 
     // No script ever runs for these two degrade states (enableScripts: false), so there's no
-    // webview to post layout/persist or open/file back — both callbacks are unreachable, not
-    // just unused.
+    // webview to post layout/persist, open/file, graph/micro/request, or layout/file-persist
+    // back — all four callbacks are unreachable, not just unused.
     const noopOnLayoutPersist = () => {};
     const noopOnOpenFile = () => {};
+    const noopOnMicroRequest = () => {};
+    const noopOnFileLayoutPersist = () => {};
 
     if (folders === undefined || folders.length === 0) {
-      ArchitecturePanel.createOrReveal('no-workspace', context.extensionUri, noopOnLayoutPersist, noopOnOpenFile);
+      ArchitecturePanel.createOrReveal('no-workspace', context.extensionUri, noopOnLayoutPersist, noopOnOpenFile, noopOnMicroRequest, noopOnFileLayoutPersist);
       return;
     }
     if (folders.length > 1) {
-      ArchitecturePanel.createOrReveal('multi-root', context.extensionUri, noopOnLayoutPersist, noopOnOpenFile);
+      ArchitecturePanel.createOrReveal('multi-root', context.extensionUri, noopOnLayoutPersist, noopOnOpenFile, noopOnMicroRequest, noopOnFileLayoutPersist);
       return;
     }
 
@@ -114,11 +159,32 @@ export function registerShowArchitectureCommand(context: vscode.ExtensionContext
     const panel = ArchitecturePanel.createOrReveal(
       'ready',
       context.extensionUri,
-      (positions) => {
+      (positions, edgeWaypoints) => {
+        // camera-store.ts sends both fields together as one layout/persist event specifically
+        // so they can't race as two independently-debounced writes — but these two
+        // memento.update() calls are still two separate writes to two separate workspaceState
+        // keys, not one atomic write. A process kill between the two resolving could in theory
+        // leave the pair inconsistent with what the webview actually sent. Checked and
+        // accepted, not fixed: VS Code's own storage service coalesces multiple `.update()`
+        // calls issued in the same host tick into one on-disk flush in practice, and this is
+        // view-state (a dropped edge bend, not import truth) — cache/store.ts's single-file
+        // atomic write exists because THAT data is truth a stale read would silently trust;
+        // losing one of two positions/waypoints writes here just means a drag needs to be redone.
         void setPositions(context.workspaceState, positions);
+        void setEdgeWaypoints(context.workspaceState, edgeWaypoints);
       },
       (fileId, line) => {
         void handleOpenFile(rootDir, fileId, line);
+      },
+      (blockId) => {
+        triggerMicroAnalysis(runner, panel, { rootDir, cacheDir, blockId });
+      },
+      (filePositions, fileEdgeWaypoints) => {
+        // File-level drag parity (ROADMAP-V2.md) — same two-separate-memento.update()-calls
+        // posture as the macro onLayoutPersist callback above, and the same accepted, real
+        // limit: view state, not import truth, so a lost write just means a drag needs redoing.
+        void setFilePositions(context.workspaceState, filePositions);
+        void setFileEdgeWaypoints(context.workspaceState, fileEdgeWaypoints);
       },
     );
 
@@ -140,7 +206,13 @@ export function registerShowArchitectureCommand(context: vscode.ExtensionContext
     const generation = panel.currentGeneration;
     void panel.whenReady().then(() => {
       if (!panel.isCurrentGeneration(generation)) return;
-      panel.post({ type: 'layout/restore', positions: getPositions(context.workspaceState) });
+      panel.post({
+        type: 'layout/restore',
+        positions: getPositions(context.workspaceState),
+        edgeWaypoints: getEdgeWaypoints(context.workspaceState),
+        filePositions: getFilePositions(context.workspaceState),
+        fileEdgeWaypoints: getFileEdgeWaypoints(context.workspaceState),
+      });
       triggerAnalysis(runner, panel, { rootDir, cacheDir });
     });
 
