@@ -1,0 +1,71 @@
+.bn-docstack-card {
+  position: relative;
+  width: 220px;
+  height: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.bn-docstack-card[data-large] {
+  width: 236px;
+  height: 120px;
+}
+
+.bn-docstack-layers {
+  position: relative;
+  width: 64px;
+  height: 40px;
+}
+
+.bn-docstack-layer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, var(--bn-card-bg-top), var(--bn-card-bg-bottom));
+  border: 1px solid var(--bn-border);
+  border-radius: 7px;
+  box-shadow: var(--bn-shadow-card);
+}
+
+/* Three overlapping rectangles, offset diagonally — the same stacked-slab visual language as
+   the layer-stack floor-picker (FloorPicker.css), applied here instead of a 3D perspective
+   scene (docs/planning/ROADMAP-V2.md's v2.0.1 decision). */
+.bn-docstack-layer:nth-child(1) {
+  transform: translate(6px, 6px);
+  opacity: 0.55;
+}
+
+.bn-docstack-layer:nth-child(2) {
+  transform: translate(3px, 3px);
+  opacity: 0.8;
+}
+
+.bn-docstack-layer:nth-child(3) {
+  transform: translate(0, 0);
+}
+
+.bn-docstack-card:hover .bn-docstack-layer:nth-child(3) {
+  border-color: var(--bn-border-selected);
+}
+
+.bn-docstack-card[data-selected] .bn-docstack-layer:nth-child(3) {
+  border-color: var(--bn-border-selected);
+  box-shadow: var(--bn-shadow-card-selected);
+}
+
+.bn-docstack-card:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, var(--bn-border-selected));
+  outline-offset: 2px;
+}
+
+.bn-docstack-label {
+  font: 600 12px var(--bn-font-ui);
+  color: var(--bn-text-primary);
+}
+
+.bn-docstack-count {
+  font: 700 13px var(--bn-font-mono);
+}
