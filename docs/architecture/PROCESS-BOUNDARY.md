@@ -10,20 +10,21 @@ the alternatives considered.
 JSON out of stdout, no risk of a stray `console.log` in a transitive dependency corrupting
 the stream.
 
-## Two entrypoints, two contracts, two functions (as of v2.0)
+## Two entrypoints, two contracts, two functions (as of v2.0.1)
 
 `core/src/cli.ts` and `core/src/ipc-worker.ts` are both thin adapters — neither contains
 analysis logic itself. `cli.ts` only ever calls `analyze()`. `ipc-worker.ts` calls either
-`analyze()` (`mode: 'macro'`) or `analyze-micro.ts`'s `analyzeMicroBlock()` (`mode: 'micro'`,
-v2.0's micro view — `docs/planning/ROADMAP-V2.md`), branching on its incoming request's
-`mode` discriminant. Never both for one request; `ipc-worker.ts`'s `process.once('message',
-...)` handler dispatches to exactly one.
+`analyze()` (`mode: 'macro'`) or `analyze-layer.ts`'s `analyzeLayer()` (`mode: 'layer'`,
+v2.0.1's unified layer model, superseding v2.0's block-only `mode: 'micro'` —
+`docs/planning/ROADMAP-V2.md`), branching on its incoming request's `mode` discriminant.
+Never both for one request; `ipc-worker.ts`'s `process.once('message', ...)` handler
+dispatches to exactly one.
 
 | Entrypoint | Caller | Contract |
 |---|---|---|
 | `cli.ts` | Terminal, CI | stdout text + a final JSON blob (`--json`) |
 | `ipc-worker.ts`, `mode: 'macro'` | `extension/src/analysis-runner.ts`'s `run()` | structured `process.send({type:'progress'\|'result'\|'error', ...})` — `'error'` (not an uncaught crash) when `analyze()` rejects, e.g. a nonexistent `rootDir` |
-| `ipc-worker.ts`, `mode: 'micro'` | `extension/src/analysis-runner.ts`'s `runMicro()` | structured `process.send({type:'micro-result'\|'error', ...})` — no `'progress'` messages (`analyzeMicroBlock()` doesn't call `onProgress`, since it's a bounded, already-cached-data read, not a fresh analysis); `'error'` when the cache is missing or `blockId` isn't in the cached snapshot, same "never a hang" posture as the macro path |
+| `ipc-worker.ts`, `mode: 'layer'` | `extension/src/analysis-runner.ts`'s `runLayer()` | structured `process.send({type:'layer-result'\|'error', ...})` — no `'progress'` messages (`analyzeLayer()` doesn't call `onProgress`, since it's a bounded, already-cached-data read, not a fresh analysis); `'error'` only when there's no cache on disk at all yet, same "never a hang" posture as the macro path. A `layerPath` that no longer resolves to anything (its directory was deleted since the cache was written) is NOT an error — `itemsForLayer` simply returns an empty boundary set, so the response is a valid, successful `LayerGraphResult` with `items: []`, rendered as an empty (not erroring) layer |
 
 ## Sequence
 
@@ -45,26 +46,33 @@ sequenceDiagram
     Runner->>Runner: kill worker
 ```
 
-Micro (`mode: 'micro'`, v2.0 — a block double-click, `FLOWS.md`'s flow 5):
+Layer (`mode: 'layer'`, v2.0.1 — any layer navigation, `FLOWS.md`'s "Layer navigation" flow):
 
 ```mermaid
 sequenceDiagram
     participant Runner as extension: analysis-runner.ts
     participant Worker as core: ipc-worker.ts (forked)
-    participant Micro as core: analyzeMicroBlock()
+    participant Layer as core: analyzeLayer()
 
     Runner->>Worker: child_process.fork(ipc-worker.js)
-    Runner->>Worker: send({mode:'micro', rootDir, cacheDir, blockId})
-    Worker->>Micro: analyzeMicroBlock({rootDir, cacheDir, blockId})
-    alt cache has this block
-        Micro-->>Worker: MicroGraphResult
-        Worker-->>Runner: send({type:'micro-result', micro})
-    else no cache, or blockId not in the cached snapshot
-        Micro-->>Worker: undefined
+    Runner->>Worker: send({mode:'layer', rootDir, cacheDir, layerPath})
+    Worker->>Layer: analyzeLayer({rootDir, cacheDir, layerPath})
+    alt cache exists
+        Layer-->>Worker: LayerGraphResult
+        Worker-->>Runner: send({type:'layer-result', layer})
+    else no cache yet
+        Layer-->>Worker: undefined
         Worker-->>Runner: send({type:'error', message})
     end
     Runner->>Runner: kill worker
 ```
+
+Note this fork happens for EVERY layer navigation, including the very first layer-0 fetch
+right after a macro analysis completes (`FLOWS.md`'s flow 1) — not just a folder dive. Only a
+missing cache produces an `'error'` message; a `layerPath` that no longer resolves to anything
+in the cached snapshot (e.g. its directory was deleted since the cache was written) is not an
+error at all — it resolves to a valid, empty layer (see the table above) — never a crash or a
+hang either way.
 
 ## Where the forked file physically lives (Task 6)
 
@@ -107,18 +115,20 @@ complete and is then discarded, never blocked or killed mid-flight (killing a fo
 process mid-write is more failure-prone than just ignoring a result that's already on its
 way).
 
-**v2.0's micro (`runMicro()`) stream follows the identical one-shot fork lifecycle, gated by
-its own, independent generation counter — `#latestMicroGeneration`, a separate namespace from
+**v2.0.1's layer (`runLayer()`) stream follows the identical one-shot fork lifecycle, gated by
+its own, independent generation counter — `#latestLayerGeneration`, a separate namespace from
 macro's `#latestGeneration`**, so a routine save-triggered macro re-analysis can never
-supersede an in-flight, user-driven micro request, or vice versa (`PROTOCOL.md`'s "Micro
-(file-level) requests" section has the full race-safety argument).
+supersede an in-flight, user-driven layer navigation, or vice versa (`PROTOCOL.md`'s "Layer
+requests" section has the full race-safety argument). Every layer navigation goes through this
+stream now, not just a block dive — including the very first layer-0 fetch right after a macro
+analysis completes.
 
 ## The rule this creates
 
 `extension/` never does `import { analyze } from '@blocknet/core'` and calls it in-process —
-nor, as of v2.0, `analyzeMicroBlock()`. The only legal way `extension/` touches `core`'s
-analysis, macro or micro, is forking the worker file. `core/src/index.ts` is still the
-correct import for *types* (`GraphResult`, `BlockNode`, `MicroGraphResult`, etc.) on both
+nor, as of v2.0.1, `analyzeLayer()`. The only legal way `extension/` touches `core`'s
+analysis, macro or layer, is forking the worker file. `core/src/index.ts` is still the
+correct import for *types* (`GraphResult`, `BlockNode`, `LayerGraphResult`, etc.) on both
 sides of the boundary — only the analysis *calls* themselves are process-isolated.
 
 One deliberate, narrow exception: `extension/src/watcher.ts` imports `isExcludedPath` as a

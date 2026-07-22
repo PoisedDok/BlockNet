@@ -15,65 +15,104 @@ vite (webview), including through vitest's own transform pipeline for tests.
 |---|---|---|
 | Host → Webview | `graph/macro` | `{ nodes: WebviewBlockNode[], edges: Edge[] }` |
 | Host → Webview | `risks/update` | `{ risks: Risk[] }` |
-| Host → Webview | `layout/restore` | `{ positions, edgeWaypoints, filePositions, fileEdgeWaypoints: Record<string,{x,y}> }` |
+| Host → Webview | `layout/restore` | `{ positions: Record<string,Position>, edgeWaypoints: Record<string,Position[]> }` |
 | Host → Webview | `analysis/progress` | `{ phase, done, total }` (from `Progress`) |
-| Host → Webview | `graph/micro` | `{ blockId, files: WebviewMicroFileNode[], edges: MicroFileEdge[] }` |
-| Host → Webview | `graph/micro/error` | `{ blockId, message }` |
-| Webview → Host | `webview/ready` | *(none)* — see "The ready handshake" below |
+| Host → Webview | `graph/layer` | `{ layerPath, items: WebviewLayerItem[], edges: LayerEdge[], arrows: LayerArrow[] }` |
+| Host → Webview | `graph/layer/error` | `{ layerPath, message }` |
+| Webview → Host | `webview/ready` | `{ generation }` — see "The ready handshake" below |
 | Webview → Host | `open/file` | `{ fileId, line? }` → `showTextDocument` (ViewColumn.Beside) |
 | Webview → Host | `open/diff` | `{ fileId }` → `vscode.diff` working-tree vs HEAD |
-| Webview → Host | `layout/persist` | `{ positions, edgeWaypoints }` — macro graph only |
-| Webview → Host | `layout/file-persist` | `{ filePositions, fileEdgeWaypoints }` — micro (file) graph only |
-| Webview → Host | `graph/micro/request` | `{ blockId }` — a block double-click |
+| Webview → Host | `layout/persist` | `{ positions, edgeWaypoints }` — one flat map, every layer |
+| Webview → Host | `graph/layer/request` | `{ layerPath }` — a layer navigation (dive, floor-picker jump, or arrow) |
 
 `risks/update` is sent by `commands/show-architecture.ts` alongside `graph/macro` but not
 currently consumed by the webview — every risk the UI shows (StatusBar's count, `RiskPopover`)
-already comes from `graph/macro`'s own `Edge.risk`, the identical `Risk` objects `risks/update`
-would otherwise duplicate. It stays part of the contract (and the host keeps sending it) as
-the natural home for a future dedicated risks-list view (`docs/planning/ROADMAP-V2.md`), not
-dead protocol — `App.tsx`'s message switch has an explicit no-op case for it, not a silent
-drop.
+already comes from `graph/layer`'s own `LayerEdge.risk`/`LayerArrow.risk`/`LayerFileItem.risk`,
+the identical underlying `Risk` set `risks/update` would otherwise duplicate. It stays part of
+the contract (and the host keeps sending it) as the natural home for a future dedicated
+risks-list view (`docs/planning/ROADMAP-V2.md`), not dead protocol — `App.tsx`'s message switch
+has an explicit no-op case for it, not a silent drop.
 
 `graph/macro`'s `nodes` are `WebviewBlockNode` (`shared/protocol.ts`: `BlockNode & { dirty:
 boolean }`), not core's own `BlockNode` directly — dirty-file state is an extension-host-only
 concern (`STATE-OWNERSHIP.md`, `git.ts` + `dirty-blocks.ts`, Task 9) computed fresh on every
 push, never something core's frozen Checkpoint-B schema knows about. `commands/show-
 architecture.ts`'s `triggerAnalysis` is the one place a plain `BlockNode` gains the field, right
-before posting.
+before posting. `graph/layer`'s `items` gain the identical augmentation one level down —
+`WebviewLayerItem = LayerItem & { dirty: boolean }` — computed by that same file's
+`triggerLayerAnalysis` (see "Layer requests" below).
+
+**`graph/macro`'s own payload is never rendered directly by the webview (v2.0.1, ROADMAP-V2.md's
+unified layer model).** Its sole remaining job is to signal that a fresh analysis snapshot
+exists — `App.tsx`'s `graph/macro` case issues a `graph/layer/request` in response, which is what
+actually populates the mixed block/file/folder view the user sees. On a cold open this is layer
+0 (`''`, `currentLayerPathRef`'s initial value); on every subsequent `graph/macro` (a
+save-triggered re-analysis), it re-requests whichever `layerPath` is CURRENTLY being viewed —
+`currentLayerPathRef` is updated synchronously every time `GraphView.tsx` issues a navigation,
+read (never written) by the `graph/macro` handler. This is load-bearing, not incidental:
+`GraphView.tsx` only ever applies a `graph/layer` response whose `layerPath` matches its own
+current or in-flight layer, so hardcoding a re-request to root would leave a deep layer showing
+stale pre-edit data until the user manually backed all the way out and back in — a real bug
+found and fixed while building this (`docs/planning/PROGRESS-V2.md`'s v2.0.1 entry). This
+two-step bootstrap (wait for `graph/macro`, then fetch a layer) was the deliberately minimal-risk
+choice over redefining `graph/macro`'s own wire shape to carry layer data directly — it reuses
+`graph/layer`'s existing rendering path for every layer, including the first one, rather than
+giving layer 0 a special-cased second code path.
 
 `open/file` is implemented on both sides as of Task 9: `RiskPopover`'s evidence `file:line`
 entries post it (`extension/webview/src/ui/RiskPopover.tsx`), and `commands/open-file.ts`
-handles it host-side. As of v2.0 (`ROADMAP-V2.md`'s micro view), `FileCard`'s ⤢ button
-(`extension/webview/src/flow/FileCard.tsx`, wired in `FileCanvas.tsx`) is a second sender —
-the file-level target the original block-card ⤢ never had (a block is always a directory,
-`BlockNode.path`, never a single file; a `MicroFileNode.id` always is one). `commands/
-open-file.ts` needed no changes at all for this — the same `handleOpenFile(rootDir, fileId,
-line?)` handles both senders unchanged. `open/diff` stays defined in the protocol but
-unimplemented on both sides — it still has no UI trigger anywhere, block or file level.
+handles it host-side. A `FileCard`'s ⤢ button and a `DocStackPopover` row (`extension/webview/
+src/ui/DocStackPopover.tsx`) are further senders — the same `handleOpenFile(rootDir, fileId,
+line?)` handles all of them unchanged, since every sender already posts a real repo-relative
+file path. `open/diff` stays defined in the protocol but unimplemented on both sides — it still
+has no UI trigger anywhere.
 
-## Micro (file-level) requests
+## Layer requests
 
-`graph/micro/request` (a block double-click, `GraphView.tsx`'s `handleDive`) triggers
-`commands/show-architecture.ts`'s `triggerMicroAnalysis`, which forks a worker in `'micro'`
-mode (`core/src/ipc-worker.ts`, `PROCESS-BOUNDARY.md`) and responds with either `graph/micro`
-(success) or `graph/micro/error` (no cache yet, or a stale `blockId` no longer in the cached
-snapshot — `core/src/analyze-micro.ts`'s own degrade rule). Unlike a macro analysis failure
-(`vscode.window.showErrorMessage`, a global toast), a micro failure is local to the block the
-user just dove into, so it's posted back as `graph/micro/error` instead — the webview falls
-back to the macro view with an inline banner (`GraphView.tsx`) rather than a global toast plus
-a webview stuck mid-transition with nothing to correct it.
+`graph/layer/request` is posted by the webview for every layer navigation — the very first
+layer-0 fetch above, a folder dive (`GraphView.tsx`'s `handleDive`), a floor-picker jump
+(`FloorPicker.tsx`), or an inter-layer arrow click (`InterLayerArrows.tsx`) — there is no
+separate message per navigation trigger; all three resolve to the same `{layerPath}` shape
+before posting, since `layerPath` alone is enough for the host to answer identically regardless
+of how the user got there (see FLOWS.md's "Layer navigation" flow for why this is required for
+correctness, not just convenient).
+
+`commands/show-architecture.ts`'s `triggerLayerAnalysis` handles it: computes items/edges/arrows
+for that `layerPath` (`core/src/analyze-layer.ts`'s `analyzeLayer()`, reading the existing
+analysis cache — it does not re-run a full analysis) and responds with either `graph/layer`
+(success) or `graph/layer/error` (only when there's no cache on disk at all yet —
+`analyze-layer.ts`'s own degrade rule). A `layerPath` that no longer resolves to anything in the
+cached snapshot — its directory was deleted since the cache was written — is NOT an error:
+`itemsForLayer` simply returns an empty boundary set, so the response is still a successful
+`graph/layer` with `items: []`, rendered as an empty layer rather than a banner. Unlike a macro
+analysis failure (`vscode.window.showErrorMessage`, a global toast), a genuine layer-request
+failure (no cache yet) is local to the navigation the user just made, so it's posted back as
+`graph/layer/error` instead — the webview falls back to the previous layer with an inline notice
+(`GraphView.tsx`) rather than
+a global toast plus a webview stuck mid-transition with nothing to correct it.
 
 Gated by its own **independent** generation counter, not macro's: `AnalysisRunner`'s
-`#latestMicroGeneration`/`isLatestMicro()` (`analysis-runner.ts`) is a separate stream from
+`#latestLayerGeneration`/`isLatestLayer()` (`analysis-runner.ts`) is a separate stream from
 `#latestGeneration`/`isLatest()` — a routine save-triggered macro re-analysis must never
-supersede an in-flight, user-driven micro request, and vice versa. `triggerMicroAnalysis`
-applies the same dual gate `triggerAnalysis` does for macro (`isLatestMicro()` AND
+supersede an in-flight, user-driven layer navigation, and vice versa. `triggerLayerAnalysis`
+applies the same dual gate `triggerAnalysis` does for macro (`isLatestLayer()` AND
 `panel.isCurrentGeneration()`, both re-checked after every await) — the identical stale-post
-race Task 9's review found and fixed for `graph/macro` applies identically here. The webview
-adds a third, client-side layer on top: `GraphView.tsx` compares an incoming `graph/micro`/
-`graph/micro/error`'s `blockId` against its own local `pendingBlockId`, discarding a late
-response for a block the user has since navigated away from (backed out, or dove into a
-different block) even if it somehow survived both host-side gates.
+race Task 9's review found and fixed for `graph/macro` applies identically here.
+
+Dirty markers for a `graph/layer` response reuse `dirty-blocks.ts`'s `dirtyBlockIds()` unchanged
+for folder items (it was already generically typed `{id,path}[]`, never block-specific, just
+narrowly called until now) and exact-path membership for file items. A `LayerDocStackItem` has
+no single path of its own to check against — it's marked dirty if ANY of its own constituent
+files is (`triggerLayerAnalysis`'s explicit third branch; see DATA-MODEL.md's field notes for
+why omitting this case would have silently always reported `dirty: false` for every doc stack).
+
+**Process-boundary note** (ADR-0011): a layer request forks a worker exactly like a macro
+analysis does (`core/src/ipc-worker.ts`'s `'layer'` request kind), reusing the existing
+fork-per-request machinery rather than a new caching mechanism, even though layer navigation
+(drilling, floor-picker clicks) is far more frequent than the "on-save, not on-keystroke"
+reasoning ADR-0011 was written against. This is a deliberate measure-then-decide call, not an
+oversight — flagged for live-verification measurement before optimizing (`docs/planning/
+ROADMAP-V2.md`), not resolved speculatively now.
 
 ## The ready handshake
 
@@ -99,25 +138,42 @@ ready handshake above, so the first paint has persisted positions available and 
 a default layout that then jumps. Implemented in `commands/show-architecture.ts`:
 `panel.whenReady().then(() => { panel.post({type: 'layout/restore', ...}); triggerAnalysis(...) })`.
 Positions come from `state.ts`'s `getPositions()` (`context.workspaceState`) — a sparse map of
-only the ids a user has actually moved or previously restored, never a full snapshot of
-`layout.ts`'s dagre output (see `layout.ts`'s own header comment for why that distinction is
-load-bearing, not cosmetic).
+only the ids a user has actually moved or previously restored, never a full snapshot of any
+layer's own computed layout (see `flow/layer-layout.ts`'s own header comment for why that
+distinction is load-bearing, not cosmetic).
+
+## State keying, generalized (ROADMAP-V2.md)
+
+`layout/restore` and `layout/persist` each carry exactly ONE flat `positions` map and ONE flat
+`edgeWaypoints` map, spanning every item (block, plain folder, file, or doc stack) and every
+intra-layer edge at every depth — the retired macro/micro split's four separate maps
+(`positions`/`edgeWaypoints`/`filePositions`/`fileEdgeWaypoints`) are gone. This is safe because
+every id is already globally unique by repo-relative path (a file, folder, or block's `id` is
+always its own path; a doc stack's `id` is derived from its layer path, never colliding with a
+real file/folder path) — a single flat map can't collide across layers the way a naive
+per-layer-scoped key scheme would need to guard against. `state.ts`'s
+`getPositions`/`setPositions`/`getEdgeWaypoints`/`setEdgeWaypoints` read/write two
+workspaceState keys, `blocknet.positions`/`blocknet.edgeWaypoints`, globally scoped exactly as
+described here — not one key per layer.
+
+Inter-layer arrows (`LayerArrow`, DATA-MODEL.md) are never persisted at all — they're a pure
+function of the current layer's items plus the full edge set (`resolveLayerConnections()`,
+recomputed fresh on every `graph/layer` response), not draggable, and carry no independent
+identity worth remembering across a save.
 
 ## Draggable, multi-point edge waypoints (ROADMAP-V2.md)
 
-`layout/restore` and `layout/persist` both carry a second sparse-override map, `edgeWaypoints`,
-alongside `positions` — an edge id absent from it falls through to its plain geometric curve,
-the identical "sparse, not a full snapshot" contract `positions` already establishes. Each
-PRESENT value is an ORDERED ARRAY of zero-or-more bend points (`Position[]`, not a single
-`Position`) — the original design supported exactly one waypoint per edge; this was fully
-redesigned to a multi-point model the same day, after real usage (both automated and a live
-user session) exposed that a single fixed midpoint wasn't enough for real, tangled repo graphs.
-`state.ts`'s `getEdgeWaypoints`/`setEdgeWaypoints` read/write it from a separate
-`blocknet.edgeWaypoints` workspaceState key (not folded into the positions map, so the two
-concerns stay independently readable/testable). `camera-store.ts`'s `useCameraStore` owns both
-maps together in the webview, sharing ONE debounced `layout/persist` send (300ms) so a position
-drag and a waypoint drag close together in time coalesce into one write instead of racing as two
-independently-debounced ones.
+Each PRESENT `edgeWaypoints` value is an ORDERED ARRAY of zero-or-more bend points
+(`Position[]`, not a single `Position`) — the original design supported exactly one waypoint per
+edge; this was fully redesigned to a multi-point model the same day, after real usage (both
+automated and a live user session) exposed that a single fixed midpoint wasn't enough for real,
+tangled repo graphs. `camera-store.ts`'s `useCameraStore` owns both maps together in the
+webview, sharing ONE debounced `layout/persist` send (300ms) so a position drag and a waypoint
+drag close together in time coalesce into one write instead of racing as two
+independently-debounced ones. As of the unified layer model, `LayerCanvas.tsx` is the single
+canvas component every layer mounts — there is no longer a separate macro-canvas/micro-canvas
+split, so this one `useCameraStore` instance and its one debounced send now cover every layer a
+user visits in a session, not just the top one.
 
 **The interaction**: a user grabs the edge's own rendered LINE directly, anywhere along it — not
 a separate, always-visible handle widget — via a new invisible, wide (`22px` stroke)
@@ -147,9 +203,7 @@ cosmetic (the `data-risk` CSS hook, the conditional "!" badge, and the badge/han
 branching in any geometry or gesture-handling code. `RiskEdge.css` raises
 `.react-flow__edgelabel-renderer`'s `z-index` above React Flow's own default (which otherwise
 paints every node card above every edge label, burying a handle under any node its edge visually
-passes beneath). Originally scoped to `BlockCanvas.tsx`'s macro graph only; `FileCanvas.tsx`'s
-micro-view edges gained the identical `onWaypointsChange` wiring in the file-level drag parity
-section below — `RiskEdge.tsx` itself is unchanged, reused verbatim by both canvases.
+passes beneath).
 
 **Automatic separation for parallel/anti-parallel edges** (`graph-derive.ts`'s
 `siblingOffsets()`): two edges between the SAME pair of nodes — in EITHER direction, so a
@@ -168,7 +222,10 @@ that every gesture handler reads through instead of the raw `data.waypoints` pro
 implicit point "realizes" into a real, persisted waypoint the moment a user's gesture actually
 touches it (drags it, or clicks through the insert-threshold near it), and stays purely visual
 otherwise. A lone edge between its two nodes (the common case) always gets offset 0 — zero
-change from before this system existed.
+change from before this system existed. `resolveLayerConnections()`'s `LayerEdge` ids are
+computed the same deterministic way at every layer (`edges/layer-connections.ts`'s
+`pairKey`/aggregation), so `siblingOffsets()` groups correctly regardless of which layer is
+currently mounted.
 
 **`edge-path.ts`'s control-point offset is capped, not just floored.** `dx =
 Math.min(220, Math.max(52, Math.abs(tx - sx) * 0.5))` — the floor (52) keeps close nodes'
@@ -209,52 +266,6 @@ control-point cap and sibling-offset system above:
    `.bn-edge[data-risk][data-selected] .bn-edge-line`, so selection color no longer depends on
    import order at all.
 
-## File-level drag parity (ROADMAP-V2.md)
-
-File cards and micro-edge waypoints in `FileCanvas.tsx` drag and persist the same way blocks
-and macro edges do in `BlockCanvas.tsx` — same `applyNodeChanges` controlled-mode node-drag
-lifecycle, same `RiskEdge.tsx`/`WaypointHandle` component for edge bending. Two things differ
-from the macro case, both load-bearing:
-
-**A second, independent `useCameraStore` instance, owned by `GraphView.tsx`, not
-`FileCanvas.tsx`.** `FileCanvas` fully unmounts and remounts on every dive into a block — even
-a re-dive into the *same* block, since `GraphView.tsx`'s `handleBack` tears down
-`<FileCanvas>` entirely (`microMounted` → `false`) rather than hiding it. Only a component
-that survives that remount boundary for the panel's whole session can preserve a same-session
-drag across a "drag a file, go back to the map, dive back into the same block" round trip —
-`GraphView.tsx` is that component; `FileCanvas.tsx` itself is not. This second hook instance
-persists via `layout/file-persist`, a message distinct from `BlockCanvas.tsx`'s own
-`layout/persist` — see `camera-store.ts`'s own header comment for why these stay two
-independent hooks/messages (disjoint workspaceState keys, no need to write them atomically
-together) rather than more fields bolted onto one shared shape. `state.ts`'s
-`getFilePositions`/`setFilePositions`/`getFileEdgeWaypoints`/`setFileEdgeWaypoints` read/write
-two new keys, `blocknet.filePositions`/`blocknet.fileEdgeWaypoints`, mirroring
-`getPositions`/`setPositions`'s sparse-override contract exactly.
-
-**A real, live-reproduced React Flow bug this split architecture creates, and its fix.**
-Because `GraphView.tsx`'s file-camera-store updates its own React state on *every*
-`onPositionChange` call — every drag frame, not just at drag end — a naive implementation
-that fed that live state straight back into `FileCanvas`'s `initialPositions` prop, reactively
-included in the memo that seeds each node's starting position, recomputed that memo's object
-identity on every single frame of a drag. React Flow's own internal drag-state tracking does
-not tolerate an externally-driven reset of its managed nodes array mid-gesture: this produced
-React Flow's error #015 ("trying to drag a node that is not initialized") firing repeatedly,
-with visible flicker, confirmed live via Playwright (not merely reasoned about) — the exact
-"controlled mode must go through `applyNodeChanges`, never a hand-rolled reset" lesson
-`BlockCanvas.tsx`'s own header comment already documents, encountered again one layer up. The
-fix: `FileCanvas.tsx` captures `initialPositions` via `useState`'s **lazy initializer**
-(`const [seedPositions] = useState(initialPositions)`) — read once, at mount, never updated
-again for that mount's lifetime. Since `FileCanvas` always fully remounts on a fresh dive, a
-mount-time-only capture already *is* "whatever `GraphView`'s camera store last knew," with no
-risk of a live per-frame feedback loop. (An earlier attempt used a `ref` updated via a
-`useEffect` instead of `useState`'s lazy initializer — functionally equivalent, but reading a
-ref's `.current` inside a `useMemo` factory runs during render, which the `react-hooks/refs`
-lint rule correctly flags as unsafe in general; plain state read during render has no such
-hazard.) Edge waypoints have no equivalent gap: `RiskEdge.tsx`'s `WaypointHandle` has no
-internal drag-state machine of its own to desync from — it's a portaled div whose position is
-a pure function of the `data.waypoint` prop on every render, so `flowEdges`'s `initialEdgeWaypoints`
-dependency stays a normal, live-reactive one (matching `BlockCanvas.tsx`'s own edge handling).
-
 ## Why one file, not two
 
 If `extension/src/protocol.ts` and `extension/webview/src/protocol.ts` each declared their
@@ -263,6 +274,6 @@ stop matching the other — a bug that only surfaces at runtime, never at compil
 `shared/protocol.ts` is set up so both build targets include it (esbuild for the host, vite
 for the webview — both bundlers resolve relative imports across the `extension/` directory
 boundary without any workspace-package indirection), so a payload change is a compile error on
-both sides at once — confirmed, not assumed: `layout.ts` also imports `Position` from here
-rather than declaring its own structurally-identical duplicate, and both `tsc --noEmit` and
+both sides at once — confirmed, not assumed: every layout module also imports `Position` from
+here rather than declaring its own structurally-identical duplicate, and both `tsc --noEmit` and
 `vitest run` (which transforms through the same vite pipeline as the real build) pass clean.

@@ -8,20 +8,18 @@ is a pure renderer" ([PROTOCOL.md](./PROTOCOL.md)) enforceable rather than a sug
 | Import truth (files, edges, risks) | `core` | Re-derived on every full `analyze()` call | Nothing — a full scan always trusts source over cache |
 | Content-hash manifest, `GraphResult` snapshot (last known-good), and the pre-aggregation `FileEdge[]` the delta path merges into | `core/cache` | ONE JSON file under `context.storageUri` (`cache/store.ts`), not three separate files — see below | Disk, across VS Code restarts — this is what makes a warm open instant, and what the content-changed delta path merges into |
 | `GraphResult` (current, in-memory) | Extension host | In-memory in `extension.ts`, pushed to webview | One VS Code session (reloaded from the disk snapshot on restart, then delta-checked against the manifest) |
-| Node positions (macro blocks) | Extension host | `context.workspaceState` (`blocknet.positions`) | Disk, across VS Code restarts, per-workspace |
-| Edge waypoints (macro, draggable/bendable edge routing, ROADMAP-V2.md) | Extension host | `context.workspaceState` (`blocknet.edgeWaypoints` — a separate key from node positions, `state.ts`) | Disk, across VS Code restarts, per-workspace — identical sparse-override contract as node positions |
-| File positions (micro view, per dived-into block) | Extension host | `context.workspaceState` (`blocknet.filePositions`, `state.ts`) — mutated live by `GraphView.tsx`'s own SECOND, independent `useCameraStore` instance, posted to the host as `layout/file-persist` | Disk, across VS Code restarts, per-workspace — identical sparse-override contract as the macro pair above |
-| File edge waypoints (micro view, per dived-into block) | Extension host | `context.workspaceState` (`blocknet.fileEdgeWaypoints`, `state.ts`) — same `layout/file-persist` message and camera-store instance as file positions above | Disk, across VS Code restarts, per-workspace — identical sparse-override contract as the macro pair above |
-| Camera (pan/zoom/selection) | Webview | `camera-store.ts`, in-memory | Nothing — resets on panel reload (positions do persist, see above) |
-| Dirty-file (git) markers | Extension host | Queried live from the git API on each `graph/macro` push (`git.ts` + `dirty-blocks.ts`, Task 9) and each `graph/micro` push (`git.ts`, direct membership — v2.0) | Nothing — always fresh |
-| Micro (file-level) graph for the currently-viewed block | Extension host, computed on demand | Never persisted — `analyze-micro.ts` recomputes from `core/cache`'s last macro snapshot on every `graph/micro/request` (v2.0, `ROADMAP-V2.md`) | Nothing — a re-dive into the same block always re-fetches, never serves a stale client-held copy |
-| Macro↔micro view state (which layer is active, cross-fade phase) | Webview | `GraphView.tsx`, in-memory (v2.0) | Nothing — resets on panel reload, same posture as camera (pan/zoom/selection) above |
+| Node positions (every item, every layer) | Extension host | `context.workspaceState` (`blocknet.positions`) — ONE flat map spanning blocks, plain folders, files, and doc stacks at every depth (v2.0.1's unified layer model, ROADMAP-V2.md's "State keying, generalized") | Disk, across VS Code restarts, per-workspace |
+| Edge waypoints (every intra-layer edge, every layer) | Extension host | `context.workspaceState` (`blocknet.edgeWaypoints` — a separate key from node positions, `state.ts`) — ONE flat map, same scope as positions above | Disk, across VS Code restarts, per-workspace — identical sparse-override contract as node positions |
+| Camera (pan/zoom/selection) | Webview | `camera-store.ts`, in-memory, ONE instance owned by `GraphView.tsx` for the panel's whole session | Nothing — resets on panel reload (positions do persist, see above); survives navigating away from and back to a layer within the same session, since `GraphView.tsx` (not the remounting `LayerCanvas`) owns the instance |
+| Dirty-file (git) markers | Extension host | Queried live from the git API on each `graph/macro` push (`git.ts` + `dirty-blocks.ts`, Task 9) and each `graph/layer` push (`git.ts` + `dirty-blocks.ts` for folder items, exact-path membership for file items, any-constituent-file membership for doc stacks — v2.0.1) | Nothing — always fresh |
+| Layer graph (items/edges/arrows) for the currently-viewed layer | Extension host, computed on demand | Never persisted — `analyze-layer.ts` recomputes from `core/cache`'s last macro snapshot on every `graph/layer/request` (v2.0.1, `ROADMAP-V2.md`) | Nothing — re-visiting the same layer always re-fetches, never serves a stale client-held copy (deliberate, not a gap — see PROTOCOL.md's process-boundary note) |
+| Layer navigation state (the stack of visited layers, cross-fade phase) | Webview | `GraphView.tsx`, in-memory — an arbitrary-depth array of `{path, name}` entries, not a fixed macro/micro phase machine (v2.0.1 replaces the old two-level `'macro'\|'diving'\|'micro'` model with one uniform stack, since every layer — including layer 0 — is now reached and rendered identically) | Nothing — resets on panel reload, same posture as camera (pan/zoom/selection) above; a reload always restarts at layer 0 |
 
 ## The rule this enforces
 
-The webview never receives raw file paths beyond what's needed to render
-(`BlockNode.path`) and never talks to disk, git, or the child process directly — every one
-of those crossings goes through
+The webview never receives raw file paths beyond what's needed to render (`BlockNode.path`,
+`LayerItem`'s own `path`/`id` fields) and never talks to disk, git, or the child process
+directly — every one of those crossings goes through
 [`shared/protocol.ts`](../architecture/PROTOCOL.md).
 
 ## Multi-window safety
