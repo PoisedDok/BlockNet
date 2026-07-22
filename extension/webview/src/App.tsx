@@ -1,25 +1,25 @@
-import { useEffect, useState } from 'react';
-import type { Edge, Progress } from '@blocknet/core';
-import { GraphView, type MicroErrorPayload, type MicroPayload } from './flow/GraphView.js';
-import type { Position } from './flow/layout.js';
-import { sampleNodes, sampleEdges, sampleMicroByBlock } from './fixtures/sample-graph.js';
-import { stressNodes, stressEdges, stressMicroByBlock } from './fixtures/stress-graph.js';
+import { useEffect, useRef, useState } from 'react';
+import type { Progress } from '@blocknet/core';
+import { GraphView, type LayerErrorPayload, type LayerPayload } from './flow/GraphView.js';
+import type { Position } from '../../src/shared/protocol.js';
+import { sampleLayers } from './fixtures/sample-graph.js';
+import { stressLayers } from './fixtures/stress-graph.js';
 import { onHostMessage, postToHost } from './host-bridge.js';
-import type { WebviewBlockNode, WebviewMicroFileNode } from '../../src/shared/protocol.js';
 
-// Dev/QA-only fixture bypass, never reachable from a real VS Code host: `?sample=1` (the 5-
-// block fixture exercising a real CIRCULAR cycle, a BOUNDARY deep-import, and a risk-free edge
-// at once) or `?stress=1` (30 blocks/100 edges, Task 7's stated scale target). Both render
-// GraphView directly and never call LiveApp/host-bridge.ts — load-bearing, not just a
-// convenience: acquireVsCodeApi() only exists inside a real VS Code webview, so LiveApp would
-// throw immediately in a plain browser (e.g. `vite preview` for Playwright screenshot
-// verification), which these two params exist to route around entirely.
+// Dev/QA-only fixture bypass, never reachable from a real VS Code host: `?sample=1` (a small
+// fixture exercising a real CIRCULAR cycle, a crossing boundary-style edge, a risk-free edge,
+// and a loose root file not wrapped in any block at once) or `?stress=1` (30 blocks/100 edges,
+// Task 7's stated scale target). Both render GraphView directly and never call LiveApp/
+// host-bridge.ts — load-bearing, not just a convenience: acquireVsCodeApi() only exists inside
+// a real VS Code webview, so LiveApp would throw immediately in a plain browser (e.g. `vite
+// preview` for Playwright screenshot verification), which these two params exist to route
+// around entirely.
 const params = new URLSearchParams(window.location.search);
 const fixture = params.has('stress') ? 'stress' : params.has('sample') ? 'sample' : undefined;
 
 export function App() {
-  if (fixture === 'stress') return <FixtureApp nodes={stressNodes} edges={stressEdges} microByBlock={stressMicroByBlock} />;
-  if (fixture === 'sample') return <FixtureApp nodes={sampleNodes} edges={sampleEdges} microByBlock={sampleMicroByBlock} />;
+  if (fixture === 'stress') return <FixtureApp layers={stressLayers} />;
+  if (fixture === 'sample') return <FixtureApp layers={sampleLayers} />;
   // acquireVsCodeApi() only exists inside a real VS Code webview — LiveApp would throw on
   // mount without it (an uncaught ReferenceError crashing to a blank page with no message),
   // which is exactly the confusing failure this dev-mode check exists to replace with an
@@ -35,44 +35,50 @@ export function App() {
   return <LiveApp />;
 }
 
-type FixtureMicroData = Record<string, { files: WebviewMicroFileNode[]; edges: MicroPayload['edges'] }>;
+/** Dev/QA fixture bypass for the v2.0.1 unified layer model (docs/planning/ROADMAP-V2.md) —
+ * resolves a layer navigation against a static per-layerPath dataset instead of a real host
+ * round-trip (postToHost is a no-op outside a real webview, host-bridge.ts's own documented
+ * fallback, so nothing would ever answer a real `graph/layer/request` here). The setTimeout is
+ * deliberate, not decorative: GraphView.tsx's loading-state and cross-fade logic assumes a real
+ * async gap between request and response — resolving synchronously would never exercise that
+ * path, the exact thing this fixture mode exists to let Playwright verify. Layer 0's data is
+ * seeded synchronously (no artificial delay) so the first paint isn't itself gated on a fake
+ * network round trip. */
+function FixtureApp({ layers }: { layers: Record<string, LayerPayload> }) {
+  const [layer, setLayer] = useState<LayerPayload | undefined>(layers['']);
+  const [layerError, setLayerError] = useState<LayerErrorPayload | undefined>(undefined);
 
-/** Dev/QA fixture bypass for the v2.0 micro view — resolves a block double-click against a
- * static per-block dataset instead of a real host round-trip (postToHost is a no-op outside a
- * real webview, host-bridge.ts's own documented fallback, so nothing would ever answer a real
- * `graph/micro/request` here). The setTimeout is deliberate, not decorative: GraphView.tsx's
- * loading-state and cross-fade logic assumes a real async gap between request and response —
- * resolving synchronously would never exercise that path, the exact thing this fixture mode
- * exists to let Playwright verify. */
-function FixtureApp({ nodes, edges, microByBlock }: { nodes: WebviewBlockNode[]; edges: Edge[]; microByBlock: FixtureMicroData }) {
-  const [micro, setMicro] = useState<MicroPayload | undefined>(undefined);
-  const [microError, setMicroError] = useState<MicroErrorPayload | undefined>(undefined);
-
-  function onRequestMicro(blockId: string) {
+  function onRequestLayer(layerPath: string) {
     setTimeout(() => {
-      const data = microByBlock[blockId];
+      const data = layers[layerPath];
       if (data) {
-        setMicro({ blockId, files: data.files, edges: data.edges });
+        setLayer(data);
+        setLayerError(undefined);
       } else {
-        setMicroError({ blockId, message: `No fixture micro data for block "${blockId}"` });
+        setLayerError({ layerPath, message: `No fixture layer data for "${layerPath}"` });
       }
     }, 150);
   }
 
-  return <GraphView macroNodes={nodes} macroEdges={edges} micro={micro} microError={microError} onRequestMicro={onRequestMicro} />;
+  return <GraphView layer={layer} layerError={layerError} onRequestLayer={onRequestLayer} />;
 }
 
-type Graph = { nodes: WebviewBlockNode[]; edges: Edge[] };
-
 function LiveApp() {
-  const [graph, setGraph] = useState<Graph | undefined>(undefined);
+  const [layer, setLayer] = useState<LayerPayload | undefined>(undefined);
+  const [layerError, setLayerError] = useState<LayerErrorPayload | undefined>(undefined);
   const [positions, setPositions] = useState<Record<string, Position>>({});
   const [edgeWaypoints, setEdgeWaypoints] = useState<Record<string, Position[]>>({});
-  const [filePositions, setFilePositions] = useState<Record<string, Position>>({});
-  const [fileEdgeWaypoints, setFileEdgeWaypoints] = useState<Record<string, Position[]>>({});
   const [progress, setProgress] = useState<Progress | undefined>(undefined);
-  const [micro, setMicro] = useState<MicroPayload | undefined>(undefined);
-  const [microError, setMicroError] = useState<MicroErrorPayload | undefined>(undefined);
+
+  // The layerPath GraphView last asked for — read (never written) by the graph/macro handler
+  // below so a background re-analysis (a save, while the user is several layers deep) refreshes
+  // THAT layer, not silently the root. A plain ref, not state: it must be current the instant a
+  // graph/macro arrives, with no re-render in between, and nothing here needs to re-render when
+  // it changes on its own. Not reset on unmount/remount — LiveApp mounts exactly once per panel
+  // lifetime (App() never re-mounts it), so '' (root) is only ever the value for a session's
+  // first-ever request, which is also the correct thing to re-request if a macro re-analysis
+  // somehow raced the very first graph/layer/request.
+  const currentLayerPathRef = useRef('');
 
   useEffect(() => {
     const unsubscribe = onHostMessage((message) => {
@@ -80,33 +86,41 @@ function LiveApp() {
         case 'layout/restore':
           setPositions(message.positions);
           setEdgeWaypoints(message.edgeWaypoints);
-          setFilePositions(message.filePositions);
-          setFileEdgeWaypoints(message.fileEdgeWaypoints);
           break;
         case 'graph/macro':
-          setGraph({ nodes: message.nodes, edges: message.edges });
+          // v2.0.1 unified layer model: graph/macro's own payload is no longer rendered
+          // directly (its arrival still fires right after every analysis completes, unchanged
+          // extension-host behavior) — its arrival is now just the signal that a fresh cache
+          // exists, so a graph/layer/request can be (re)issued. Re-requesting whatever layer
+          // is CURRENT (not hardcoded to root) is load-bearing, not cosmetic: a save-triggered
+          // re-analysis while the user is several layers deep must refresh what they're actually
+          // looking at — re-requesting root every time would leave a deep layer showing stale
+          // pre-edit data until the user manually backed all the way out and back in, since
+          // GraphView only applies an incoming graph/layer response whose layerPath matches its
+          // own current or pending layer (a real gap found while reconciling this flow against
+          // docs/architecture/FLOWS.md, fixed here rather than documented as-is).
+          postToHost({ type: 'graph/layer/request', layerPath: currentLayerPathRef.current });
           break;
         case 'analysis/progress':
           setProgress(message);
           break;
         case 'risks/update':
-          // Deliberately not consumed: every risk this UI shows (StatusBar's count,
-          // RiskPopover's detail) already comes from graph/macro's own edge.risk — the exact
-          // same Risk objects this message would otherwise duplicate. See PROTOCOL.md.
+          // Deliberately not consumed: every risk this UI shows already comes from a layer's
+          // own edge.risk/item.riskCount, the exact same underlying Risk data this message
+          // would otherwise duplicate. See protocol.ts.
           break;
-        case 'graph/micro':
-          setMicro({ blockId: message.blockId, files: message.files, edges: message.edges });
-          setMicroError(undefined);
+        case 'graph/layer':
+          setLayer({ layerPath: message.layerPath, items: message.items, edges: message.edges, arrows: message.arrows });
+          setLayerError(undefined);
           break;
-        case 'graph/micro/error':
-          setMicroError({ blockId: message.blockId, message: message.message });
+        case 'graph/layer/error':
+          setLayerError({ layerPath: message.layerPath, message: message.message });
           break;
         default: {
           // Exhaustiveness guard: if HostMessage ever gains a variant with no case above, this
           // line fails to compile (message narrows to `never` only when every case is
           // handled) instead of silently compiling and dropping the new message type at
-          // runtime with zero signal — confirmed as a real gap by two-pass review (a repro
-          // under this exact tsconfig's strict flags compiled clean without this guard).
+          // runtime with zero signal.
           const exhaustive: never = message;
           void exhaustive;
         }
@@ -122,7 +136,7 @@ function LiveApp() {
     return unsubscribe;
   }, []);
 
-  if (!graph) {
+  if (!layer) {
     return (
       <div className="bn-loading" role="status">
         {progress ? `Analyzing — ${progress.phase} ${progress.done}/${progress.total}` : 'Analyzing workspace…'}
@@ -132,15 +146,14 @@ function LiveApp() {
 
   return (
     <GraphView
-      macroNodes={graph.nodes}
-      macroEdges={graph.edges}
+      layer={layer}
+      layerError={layerError}
+      onRequestLayer={(layerPath) => {
+        currentLayerPathRef.current = layerPath;
+        postToHost({ type: 'graph/layer/request', layerPath });
+      }}
       initialPositions={positions}
       initialEdgeWaypoints={edgeWaypoints}
-      initialFilePositions={filePositions}
-      initialFileEdgeWaypoints={fileEdgeWaypoints}
-      micro={micro}
-      microError={microError}
-      onRequestMicro={(blockId) => postToHost({ type: 'graph/micro/request', blockId })}
     />
   );
 }
