@@ -1,4 +1,4 @@
-import type { Position } from './layout.js';
+import type { Position } from '../../../src/shared/protocol.js';
 
 export type EdgePath = { d: string; mx: number; my: number };
 

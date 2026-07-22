@@ -3,7 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { EdgeProps, Edge } from '@xyflow/react';
 import { BaseEdge, EdgeLabelRenderer, useReactFlow, useViewport } from '@xyflow/react';
 import { buildEdgePath, distanceToSegment, nearestPointOnEdgePath } from './edge-path.js';
-import type { Position } from './layout.js';
+import type { Position } from '../../../src/shared/protocol.js';
 import './RiskEdge.css';
 
 export type RiskEdgeData = {
