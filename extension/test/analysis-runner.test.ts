@@ -132,7 +132,7 @@ describe('AnalysisRunner', () => {
     expect(() => runner.dispose()).not.toThrow();
   });
 
-  it('runMicro() resolves with a real block\'s file-level graph', async () => {
+  it('runLayer() resolves with a real layer\'s items', async () => {
     const root = createTempRepo();
     writeText(resolve(root, 'package.json'), JSON.stringify({ name: 'runner-test-repo' }));
     writeText(resolve(root, 'src/pkgA/index.ts'), 'export const a = 1;\n');
@@ -141,45 +141,44 @@ describe('AnalysisRunner', () => {
     const runner = new AnalysisRunner(WORKER_PATH);
     await runner.run({ rootDir: root, cacheDir }).result;
 
-    const { result } = runner.runMicro({ rootDir: root, cacheDir, blockId: 'src/pkgA' });
+    const { result } = runner.runLayer({ rootDir: root, cacheDir, layerPath: '' });
     const outcome = await result;
 
     expect(outcome.kind).toBe('success');
     if (outcome.kind === 'success') {
-      expect(outcome.micro.blockId).toBe('src/pkgA');
-      expect(outcome.micro.files.map((f) => f.id)).toEqual(['src/pkgA/index.ts']);
+      expect(outcome.layer.layerPath).toBe('');
+      expect(outcome.layer.items.map((i) => i.id)).toContain('src/pkgA');
     }
   });
 
-  it('runMicro() resolves with an error outcome when no cache exists for that dir', async () => {
+  it('runLayer() resolves with an error outcome when no cache exists for that dir', async () => {
     const root = createTempRepo();
     const cacheDir = resolve(root, '.cache-never-written');
 
     const runner = new AnalysisRunner(WORKER_PATH);
-    const { result } = runner.runMicro({ rootDir: root, cacheDir, blockId: 'src/pkgA' });
+    const { result } = runner.runLayer({ rootDir: root, cacheDir, layerPath: '' });
     const outcome = await result;
 
     expect(outcome.kind).toBe('error');
   });
 
-  it('runMicro()\'s generation counter is independent of run()\'s macro generation counter', async () => {
+  it('runLayer()\'s generation counter is independent of run()\'s macro generation counter', async () => {
     const root = createTempRepo();
     writeText(resolve(root, 'package.json'), JSON.stringify({ name: 'runner-test-repo' }));
     const cacheDir = resolve(root, '.cache');
 
     const runner = new AnalysisRunner(WORKER_PATH);
     await runner.run({ rootDir: root, cacheDir }).result;
-    // Two more macro runs bump #latestGeneration to 3 — the micro stream must not have moved.
-    await runner.run({ rootDir: root, cacheDir }).result;
+    // Two more macro runs bump #latestGeneration to 3 — the layer stream must not have moved.
     await runner.run({ rootDir: root, cacheDir }).result;
 
-    const { generation, result } = runner.runMicro({ rootDir: root, cacheDir, blockId: 'src/pkgA' });
+    const { generation, result } = runner.runLayer({ rootDir: root, cacheDir, layerPath: '' });
     expect(generation).toBe(1);
-    expect(runner.isLatestMicro(generation)).toBe(true);
+    expect(runner.isLatestLayer(generation)).toBe(true);
     await result;
   });
 
-  it('isLatestMicro() is false for a micro run superseded by a newer one', async () => {
+  it('isLatestLayer() is false for a layer run superseded by a newer one', async () => {
     const root = createTempRepo();
     writeText(resolve(root, 'package.json'), JSON.stringify({ name: 'runner-test-repo' }));
     const cacheDir = resolve(root, '.cache');
@@ -187,11 +186,11 @@ describe('AnalysisRunner', () => {
     const runner = new AnalysisRunner(WORKER_PATH);
     await runner.run({ rootDir: root, cacheDir }).result;
 
-    const first = runner.runMicro({ rootDir: root, cacheDir, blockId: 'src/pkgA' });
-    const second = runner.runMicro({ rootDir: root, cacheDir, blockId: 'src/pkgA' });
+    const first = runner.runLayer({ rootDir: root, cacheDir, layerPath: '' });
+    const second = runner.runLayer({ rootDir: root, cacheDir, layerPath: '' });
 
     await Promise.all([first.result, second.result]);
-    expect(runner.isLatestMicro(first.generation)).toBe(false);
-    expect(runner.isLatestMicro(second.generation)).toBe(true);
+    expect(runner.isLatestLayer(first.generation)).toBe(false);
+    expect(runner.isLatestLayer(second.generation)).toBe(true);
   });
 });
