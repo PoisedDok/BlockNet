@@ -21,34 +21,29 @@ priority, stop and check.
 ## KEEP / DELEGATE (from the design handoff, still binding)
 
 KEEP the graph canvas, zoom, ports, inspector, palette. DELEGATE editing, diff, git
-history, commit UX to native VS Code — and, as of the agent-context decision below,
-DELEGATE the AI conversation itself to whatever agent the dev already has open. A
-`<textarea>` editor in the webview, or a chat/chip surface rendered inside BlockNet's own
-UI, is the signal this rule was broken.
+history, commit UX to native VS Code, and the AI conversation itself to whatever agent the
+dev already has open. A `<textarea>` editor in the webview, or a chat/chip surface rendered
+inside BlockNet's own UI, is the signal this rule was broken.
 
-## We are the map, not the assistant (2026-07-21, supersedes the earlier "context-chip" framing)
+## We are the map, not the assistant
 
 BlockNet computes and renders ground truth about a repo's structure — blocks, real import
-edges, flagged risk with evidence. It never renders its own AI chat, chip, or suggestion
-UI, and never will. The reasoning: every dev this tool matters to already has an AI agent
-open somewhere — Claude Code, Copilot, Cursor, whatever — and that agent's actual weakness
-isn't "no chat surface," it's that it has no fast, exact way to know real cross-file
-structure. It reconstructs that today by grepping, which is slow and provably wrong for
-anything grep can't resolve (barrel-file re-exports, path aliases, dynamic imports) — a
-real import-graph analyzer resolves all of that correctly, and BlockNet already *is* one
-(`core`, zero VS Code deps, `decisions/0002`). So the product's job is to be the ground an
-agent's own reasoning stands on, not a second, competing place to have the conversation.
-Concretely: any agent that can run a shell command gets a `blocknet` CLI query surface
-(`docs/planning/ROADMAP-V2.md`'s v2.2); a human browsing the graph gets a click-to-copy
-context handoff into whatever agent session they're already running. Neither path ever
-opens a chat window inside BlockNet itself.
-
-This reframes v1's "AI-addressable architecture" line (top of this doc) precisely: BlockNet
-is not *addressed by* AI through a UI it built — it's *queried by* AI through data it
-computed. A dev working with an AI agent should never be one grep-guess away from a wrong
-mental model of their own codebase; closing that gap, for every language the codebase is
-written in eventually (not just TS/JS — `ROADMAP-V2.md`'s v2.5), is the actual differentiator
-this doc's "prior-art humility" section below asks for, not a bolted-on chat feature.
+edges, flagged risk with evidence. It never renders its own AI chat, chip, or suggestion UI.
+Every dev this tool matters to already has an AI agent open somewhere — Claude Code,
+Copilot, Cursor, whatever — and that agent's actual weakness isn't "no chat surface," it's
+that it has no fast, exact way to know real cross-file structure. It reconstructs that today
+by grepping, which is provably wrong for anything grep can't resolve (barrel-file
+re-exports, path aliases, dynamic imports) — a real import-graph analyzer resolves all of
+that correctly, and BlockNet already *is* one (`core`, zero VS Code deps, `decisions/0002`).
+The product's job is to be the ground an agent's own reasoning stands on, not a second,
+competing place to have the conversation. Any agent that can run a shell command gets a
+`blocknet` CLI query surface (`docs/planning/ROADMAP-V2.md`'s v2.2); a human browsing the
+graph gets a click-to-copy context handoff into whatever agent session is already running.
+Neither path opens a chat window inside BlockNet itself. BlockNet is *queried by* AI through
+data it computed, not *addressed by* AI through a UI it built. A dev working with an AI
+agent should never be one grep-guess away from a wrong mental model of their own codebase —
+in whatever language the codebase is written in (`ROADMAP-V2.md`'s v2.5 carries this past
+TS/JS) — and closing that gap is the real differentiator, not a chat feature.
 
 ## False positives are fatal
 
@@ -81,7 +76,4 @@ minute-late graph gets uninstalled before it gets a second chance.
 The belief that agent-context access — a `blocknet` CLI query surface plus click-to-copy
 context handoff, `docs/planning/ROADMAP-V2.md`'s v2.2 — is the daily-use retention loop is a
 hypothesis, not a fact. v1 is deliberately narrow so the graph gets loved on its own first —
-agent-context access bolted onto an untrusted graph is noise, not signal. (This hypothesis
-was reframed 2026-07-21 — see "We are the map, not the assistant" above — from an earlier,
-now-superseded version of itself that assumed BlockNet would build its own in-UI AI chat/chip
-surface. The daily-use bet is unchanged; the delivery mechanism is not.)
+agent-context access bolted onto an untrusted graph is noise, not signal.
