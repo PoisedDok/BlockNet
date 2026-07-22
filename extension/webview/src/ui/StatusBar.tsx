@@ -2,14 +2,9 @@ import './StatusBar.css';
 
 export type StatusBarProps = {
   riskCount: number;
-  /** v2.0 micro view (docs/planning/ROADMAP-V2.md): "System Map / <block>" breadcrumb, only
-   * ever passed by FileCanvas.tsx (BlockCanvas.tsx never has a parent block to name).
-   * `onBack` fires the same cross-fade-back-to-macro action as GraphView.tsx's dedicated
-   * "← zoom out to map" button — the roadmap names both affordances explicitly. */
-  breadcrumb?: { blockName: string; onBack: () => void };
 };
 
-export function StatusBar({ riskCount, breadcrumb }: StatusBarProps) {
+export function StatusBar({ riskCount }: StatusBarProps) {
   return (
     <div className="bn-status-bar">
       <div className="bn-brand">
@@ -17,17 +12,6 @@ export function StatusBar({ riskCount, breadcrumb }: StatusBarProps) {
         <span className="bn-brand-name">BLOCKNET</span>
       </div>
       <div className="bn-status-divider" aria-hidden="true" />
-      {breadcrumb && (
-        <nav className="bn-breadcrumb" aria-label="Breadcrumb">
-          <button type="button" className="bn-breadcrumb-root" onClick={breadcrumb.onBack}>
-            System Map
-          </button>
-          <span className="bn-breadcrumb-sep" aria-hidden="true">
-            /
-          </span>
-          <span className="bn-breadcrumb-current">{breadcrumb.blockName}</span>
-        </nav>
-      )}
       <div className="bn-legend" aria-label="Legend">
         <span className="bn-legend-item">
           <svg width="22" height="8" aria-hidden="true">
