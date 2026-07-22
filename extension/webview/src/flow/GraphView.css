@@ -4,8 +4,8 @@
   overflow: hidden;
 }
 
-.bn-macro-layer,
-.bn-micro-layer {
+.bn-current-layer,
+.bn-next-layer {
   position: absolute;
   inset: 0;
   transition:
@@ -13,33 +13,36 @@
     transform 0.5s ease;
 }
 
-.bn-macro-layer {
+.bn-current-layer {
   opacity: 1;
   transform: scale(1);
 }
 
-.bn-macro-layer[data-hidden] {
+.bn-current-layer[data-hidden] {
   opacity: 0;
   transform: scale(1.06);
   pointer-events: none;
 }
 
-.bn-micro-layer {
+.bn-next-layer {
   opacity: 0;
   transform: scale(0.94);
   pointer-events: none;
 }
 
-.bn-micro-layer[data-visible] {
+.bn-next-layer[data-visible] {
   opacity: 1;
   transform: scale(1);
   pointer-events: auto;
 }
 
 .bn-micro-loading {
+  /* top-right, not top-left: FloorPicker.css's layer-stack navigator now permanently occupies
+     top-left (docs/planning/ROADMAP-V2.md's v2.0.1), and its height grows with drill depth, so
+     a fixed left-side offset here would eventually collide with it. */
   position: absolute;
   top: 66px;
-  left: 20px;
+  right: 20px;
   z-index: 30;
   font: 12px var(--bn-font-mono);
   color: var(--bn-text-muted);
@@ -52,7 +55,7 @@
 .bn-micro-banner {
   position: absolute;
   top: 66px;
-  left: 20px;
+  right: 20px;
   z-index: 30;
   font: 12px var(--bn-font-mono);
   color: var(--bn-risk-strong);
