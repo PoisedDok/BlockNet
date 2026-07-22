@@ -8,9 +8,10 @@ Progress Tracker" (`docs/planning/ROADMAP-V2.md` is the backlog/spec; this is th
 
 | Item | Status |
 |---|---|
-| v2.0 — Micro view | ✅ Shipped 2026-07-21. Real-repo verification done same day — see below. |
+| v2.0 — Micro view | ✅ Shipped 2026-07-21. Real-repo verification done same day — see below. Superseded by v2.0.1 below (the per-block micro view no longer exists as a separate thing — every layer, including layer 0, is the unified model now). |
 | Draggable/bendable edge routing | ✅ Shipped 2026-07-21, same day as scoped — see below. |
-| Multi-point waypoint redesign + file-level drag parity | ✅ Shipped 2026-07-21, same day — see below. |
+| Multi-point waypoint redesign + file-level drag parity | ✅ Shipped 2026-07-21, same day — see below. Superseded by v2.0.1's state-keying generalization (one flat map, not a macro/file-level split). |
+| v2.0.1 — Unified layer model, floor-picker, inter-layer arrows, doc-stack cards | ✅ Shipped 2026-07-22 — see below. |
 
 ## v2.0 — Micro view: dive into a block ✅ (2026-07-21)
 
@@ -545,8 +546,228 @@ per-file test counts at this point: `RiskEdge.test.tsx` 22 cases, `edge-path.tes
 as every prior round); no jsdom regression test for bug #1 (RF #015) — see that bug's own note
 above for why one wasn't attempted.
 
+## v2.0.1 — Unified layer model, floor-picker, inter-layer arrows, doc-stack cards ✅ (2026-07-22)
+
+The directive: every layer, including layer 0 (the old "macro" view), is now architecturally
+identical — a mix of folder-aggregate items (an AD-5-detected block or a plain subdirectory,
+visually indistinguishable) and file-leaf items, recursively, at any depth, since real repos mix
+both at every directory level. This retires the entire v2.0 macro/micro split (`BlockCanvas`/
+`FileCanvas`/`BlockNode`/`analyze-micro.ts`/`MicroFileNode`/`MicroFileEdge`/`MicroGraphResult`/
+`graph/micro*`) rather than layering a third view alongside it.
+
+**What got built:**
+- **`core/src/edges/layer-items.ts`** (new): `itemsForLayer(allFiles, layerPath, blocks)` —
+  direct-children item boundaries for any layer, including layer 0's block+loose-file/folder
+  mix. Handles the "compact folders" rule: a block nested inside another block's own directory
+  (this repo's own `extension/webview` inside `extension`) never appears separately at layer 0,
+  mirroring VS Code's own compact-folder tree convention.
+- **`core/src/edges/layer-connections.ts`** (new): `resolveLayerConnections(fileEdges, items,
+  layerPath, riskyPairs)` — the unifying insight superseding the two previously-separate ad hoc
+  aggregators (`aggregateFileEdges()`, `aggregateToBlockEdges()`) with one generalized resolver.
+  Both endpoints inside the layer → an intra-layer `LayerEdge`; exactly one inside → an
+  inter-layer `LayerArrow`, direction derived from comparing the off-screen target's own
+  path-segment depth against the layer's item depth (a depth-relative hint, not a literal
+  reachability claim — clicking always resolves the real path). Same-target arrows from the same
+  source item collapse into one ("elevator-call semantics"); different source items pointing at
+  the same off-screen file each keep their own arrow.
+- **`core/src/analyze-layer.ts`** (new, supersedes deleted `analyze-micro.ts`): wires the two
+  above together, adds per-item card metadata (real LOC, global — not block-scoped — risk
+  flagging, since a single layer routinely mixes items from several blocks), and `groupDocFiles()`
+  — collapses more than one loose doc-extension file (`.md .mdx .markdown .txt .rst .adoc`) at a
+  layer into one `LayerDocStackItem`; a single loose doc file stays an ordinary file item.
+- **Protocol**: `graph/layer`/`graph/layer/error`/`graph/layer/request` replace `graph/micro*`;
+  `graph/macro`'s own payload is never rendered directly anymore — its arrival (cold open, or a
+  background re-analysis) is the signal to (re)issue `graph/layer/request` for whatever layer is
+  currently being viewed. `layout/restore`/`layout/persist` simplify to ONE flat
+  `positions`/`edgeWaypoints` map each, spanning every item/edge at every layer — the old
+  four-key macro/file-level split (`filePositions`/`fileEdgeWaypoints`, `layout/file-persist`) is
+  gone, safe because every id is already globally unique by repo-relative path.
+  `analysis-runner.ts` gained `runLayer()`/`isLatestLayer()`, an independent generation
+  counter/namespace from macro's own, mirroring the retired `runMicro()`/`isLatestMicro()` shape.
+- **Webview**: `LayerCanvas.tsx` (new) is the one React Flow canvas for any layer, superseding
+  `BlockCanvas.tsx`/`FileCanvas.tsx` entirely — `FolderNode.tsx`/`FileNode.tsx`/`DocStackNode.tsx`
+  as its three node adapters (`FolderNode` reuses `BlockCard` verbatim for every folder-kind item,
+  block or plain folder — an empty `pills` array already renders as "no visual distinction," which
+  is the design). `layer-layout.ts` (new) is one dagre pass sizing folder/file/doc-stack items
+  differently, superseding `layout.ts`/`file-layout.ts`. `GraphView.tsx` (rewritten) owns an
+  arbitrary-depth navigation stack instead of a fixed two-level macro/micro phase machine — a
+  dive, a floor-picker jump, and an inter-layer arrow click all resolve to the same
+  `navigateTo(path, name, nextStack)`, computing the full resulting stack up front so arriving at
+  any layer always shows the same residents and the same reconstructed ancestor chain regardless
+  of how it was reached. `FloorPicker.tsx`/`.css` (new) — the Google Maps indoor floor-picker
+  pattern (flat 2D stacked slabs, top-left, current highlighted), replacing `StatusBar`'s old
+  hardcoded two-level breadcrumb as the one navigation-display surface for a session.
+  `InterLayerArrows.tsx`/`.css` (new) — the clickable arrow row per item. `DocStackCard.tsx`/
+  `DocStackNode.tsx`/`DocStackPopover.tsx` (new) — the doc-stack card (scales from a compact
+  stacked-paper look at 2-3 files to a full folder-block-sized card past 3) and its popover.
+  `camera-store.ts`'s `useCameraStore` is now ONE instance for the panel's whole session (owned by
+  `GraphView.tsx`), not a macro instance plus a second file-level one.
+- **Tests**: `edges.layer-items.test.ts`, `edges.layer-connections.test.ts`,
+  `analyze-layer.test.ts` (core); `LayerCanvas.test.tsx`, `FloorPicker.test.tsx`,
+  `InterLayerArrows.test.tsx`, `DocStackCard.test.tsx`, `DocStackPopover.test.tsx`,
+  `layer-layout.test.ts`, rewritten `GraphView.test.tsx`/`App.test.tsx` (webview) — all new or
+  rewritten against the unified model; every retired file's own test file (`BlockCanvas`,
+  `FileCanvas`, `BlockNode`, `file-layout`, `layout`, `analyze-micro`) deleted alongside it, not
+  left stale.
+
+**Real bug found and fixed while reconciling docs against the shipped code** (not caught by
+either the implementation's own tests or a live click-through — found by tracing `App.tsx`'s
+`graph/macro` handler against `FLOWS.md`'s description of what it should do): the handler
+hardcoded `graph/layer/request({layerPath: ''})` on every `graph/macro` arrival, including a
+background re-analysis triggered by a save while the user was several layers deep. Since
+`GraphView.tsx` only ever applies a `graph/layer` response whose `layerPath` matches its own
+current or in-flight layer, this meant a deep layer's data silently went stale after any edit —
+never refreshing until the user manually backed all the way out to root and back in. Fixed with
+`currentLayerPathRef`, updated on every layer navigation `GraphView` issues and read (not
+written) by the `graph/macro` handler to re-request whatever layer is actually current. Regression
+test added (`App.test.tsx`'s "re-requests the CURRENT layer (not root) when a background
+re-analysis posts a fresh graph/macro").
+
+**Docs**: `DATA-MODEL.md`, `PROTOCOL.md`, `FLOWS.md`, `STATE-OWNERSHIP.md`, `DIRECTORY-TREE.md`,
+`LAYERS.md`, `PROCESS-BOUNDARY.md`, `README.md` all reconciled against the landed code in the same
+pass — the full webview/core/extension file listing, message table, state table, and both
+sequence-diagram flows rewritten, not patched piecemeal. All cross-doc markdown links verified to
+resolve.
+
+### Two-pass adversarial review (2026-07-22)
+
+Run per `CLAUDE.md`'s ritual — two independent subagents, different framing, run in parallel so
+neither inherits the other's blind spots. **Both lanes found real bugs; all fixed and
+re-verified, not just noted.**
+
+**Doc-consistency lane** found:
+1. **Real bug, fixed:** `DATA-MODEL.md` and `PROTOCOL.md` still described `graph/macro`'s
+   arrival as always fetching layer 0 — stale relative to the `currentLayerPathRef` fix already
+   landed this session (a background re-analysis re-fetches whatever layer is CURRENTLY being
+   viewed, not root). Both docs corrected to describe the actual behavior.
+2. **Real bug, fixed:** `BUILD.md` claimed core's tsup build emits "three separate entrypoints"
+   — it's four (`path-utils` was missing from the count, though `DIRECTORY-TREE.md` already had
+   it right). Fixed.
+3. **Real bug, fixed:** `ROADMAP-V2.md` still marked v2.0.1 "planned, not started" and claimed
+   "v2.1 is next" — both contradicting this doc's own status table. Fixed with a status line
+   matching the existing pattern already used for v2.0.
+4. **Real bug, fixed:** `FLOWS.md`'s flow 2 mermaid diagram referenced an undeclared `Panel`
+   participant and modeled the identical `graph/macro` push as one hop where flow 1 modeled it
+   as two (through `panel.ts`) — inconsistent within the same file. Fixed to declare the
+   participant and route consistently through Panel both ways.
+5. **Real gap, fixed:** `DIRECTORY-TREE.md` was missing the entire `extension/test/` directory
+   (6 files) and `core/test/analyze.progress.test.ts` — pre-existing gaps predating this
+   session's work, caught incidentally by the same pass since it was checking "every file"
+   claims literally. Both added.
+6. Checked and confirmed clean: no broken links (verified programmatically), no terminology
+   drift on any retired/new file or type name, no mermaid syntax errors elsewhere, no hedge
+   language in any `docs/architecture/*.md`, no discoverability gaps.
+
+**Architectural-soundness lane** found:
+1. **CRITICAL, fixed:** `core/src/edges/layer-items.ts`'s nested-block "compact folder" rule
+   only ever injected a nested block as an item at `layerPath === ''` (root) — never at any
+   deeper layer. Confirmed via live verification against this repo's own real data (not the
+   reviewer's trace alone): diving into `extension` showed no `extension/webview` item at all,
+   and the real edge between them rendered as **13 separate dangling inter-layer arrows** off
+   `extension/src` instead of one clean intra-layer edge. Fixed by generalizing the injection
+   rule to any layer via one shared `isStrictlyUnder`/`hasIntermediateBlock` primitive
+   (`nestedBlockItemsFor`), replacing the old root-only `isNestedInsideAnotherBlock`. Re-verified
+   against this same real data after the fix: `extension/webview` now surfaces correctly, and
+   the connection resolves as 2 clean intra-layer edges. 3 tests updated/added
+   (`edges.layer-items.test.ts`), including a doubly-nested-chain regression case proving the
+   fix generalizes past one level.
+2. **CRITICAL, fixed:** `GraphView.tsx`'s settle timer (`unmountTimer`, the ref-scheduled 500ms
+   callback that freezes `shownData`/commits the stack once a cross-fade completes) was only
+   ever cancelled as a side effect of the arrival effect's OWN guard passing again on a later
+   run — which stops happening the instant a SECOND navigation starts (the guard checks the new
+   `pendingLayer` against the OLD `layer` prop, which hasn't caught up yet, so it fails on every
+   subsequent run until the second navigation's own response arrives). If that second
+   navigation is slower than the time left on the first one's timer — a normal host round trip,
+   not a rare coincidence — the orphaned timer fires first and silently applies the FIRST
+   navigation's stale data, wiping out the second navigation's still-in-flight `pendingLayer`
+   entirely. Fixed with an unconditional `clearTimeout(unmountTimer.current)` at the top of
+   `navigateTo` itself, so ANY new navigation cancels an earlier pending settle the instant it
+   begins, regardless of which phase the earlier one was in. Confirmed RED (via a targeted,
+   temporary revert, not assumed) then GREEN with a new regression test distinguishing this from
+   the already-existing "superseded navigation" test (which only covered interrupting BEFORE the
+   first navigation's timer chain started ticking at all). Also defensively reset `nextMounted`
+   in the error-handling effect for state-invariant consistency (currently masked by the
+   `pendingLayer` render guard, but a real latent inconsistency).
+3. **Minor, documented not fixed:** `LayerDocStackItem`'s synthetic `(docstack)` id assumes no
+   real directory is ever literally named that — a parenthesized-folder convention (Next.js
+   route groups) makes this theoretically reachable, at very low real-world odds. Not hardened
+   with a guaranteed-uncollidable marker (this codebase has one — NUL-joined keys, `edges/
+   layer-connections.ts`'s `pairKey`) given the cost of updating every test asserting today's
+   human-readable id shape relative to how unlikely a real collision is; documented explicitly
+   in `analyze-layer.ts`'s header comment and `DATA-MODEL.md`'s field notes instead.
+4. Checked and confirmed correct: the dual-generation-gate race safety (`isLatestLayer` +
+   `panel.isCurrentGeneration`, traced by hand for rapid double-navigation and macro-vs-layer
+   races), `resolveLayerConnections`'s self-edge skip and NUL-joined `pairKey` collision safety,
+   the depth-relative arrow-direction heuristic (holds to its own documented, non-reachability
+   bar), `walkRealFiles`'s per-call symlink dedup, and item-id global uniqueness for positions/
+   edgeWaypoints (all real ids are repo-relative paths, unique by filesystem construction).
+
+**A third, unrelated real bug found and fixed while investigating the docs against the shipped
+code** (not part of either review lane — found while re-tracing `App.tsx` for the doc-consistency
+fix above): `App.tsx`'s `graph/macro` handler hardcoded a re-request of layer 0 on every
+arrival, meaning a background re-analysis while the user was several layers deep silently left
+their current view stale until they manually navigated back to root and back in. Fixed with
+`currentLayerPathRef` (a plain ref updated on every layer navigation `GraphView` issues, read —
+never written — by the `graph/macro` handler). Regression test added to `App.test.tsx`.
+
+### Live verification (2026-07-22)
+
+Against a real `vite dev` server (`?sample=1`, headless Playwright/Chromium): layer 0 renders
+the mixed folder+file item set correctly; double-clicking a folder card dives correctly (floor-
+picker grows from 1 to 2 slabs, the dived-into layer's own files render); clicking the "System
+Map" floor-picker slab jumps back to root correctly (slabs shrink back to 1, root items
+reappear); dragging a card updates its position optimistically and immediately (client-side,
+before any host round trip). One early false alarm during this pass: Playwright's bare
+`locator.dblclick()` intermittently failed to trigger React Flow's `onNodeDoubleClick` in
+headless Chromium with zero inter-click delay — confirmed via a page-level native-event listener
+that the native `dblclick` DOM event fires regardless, so this was a CDP/timing artifact in the
+verification harness itself (fixed in the test script with an explicit small inter-click delay),
+not a product bug — noted here so a future session doesn't waste time re-diagnosing the same
+false lead.
+
+Inter-layer arrows and doc-stack grouping were verified at the **engine** level against this
+repo's own real, non-fixture data (`core/dist/index.js`'s `analyze()` + `analyzeLayer()` run
+directly against this repo, cache-dir scratch): layer 0 correctly showed 4 blocks + loose root
+files + one doc-stack (3 loose root `.md` files collapsed correctly); `docs/architecture`'s
+layer correctly collapsed 12 loose doc files into one doc-stack. This is also what surfaced the
+critical nested-block bug above. Their **interactive** (click-to-navigate, click-to-open-popover)
+behavior is covered by the existing passing component test suites
+(`InterLayerArrows.test.tsx`, `DocStackCard.test.tsx`, `DocStackPopover.test.tsx`,
+`LayerCanvas.test.tsx`) rather than a separate live click-through — the shipped `?sample=1`/
+`?stress=1` fixtures carry no arrows or multi-doc folders to exercise that interaction against
+in a real browser, and building a one-off fixture for it was judged lower value than the
+real-data engine verification above, which is what actually caught the serious bug.
+
+**Verification status (final):** `sh .githooks/pre-push` green after every fix above: core
+319/319 (31 files, +1 for the doubly-nested-chain regression test), extension 47/47 (6 files),
+webview 183/183 (16 files, +1 for the settle-timer race regression test) — builds/typechecks/
+tests/lints all pass. **Not yet done:** no real F5 extension-development-host run (same standing
+gap as every round since Task 6 — no VS Code GUI in this building environment).
+
+### Known, pre-existing issue noticed but NOT part of this session's work
+
+`git status` showed `design_handoff_blocknet_extension/` (3 files: `BlockNet.dc.html`,
+`README.md`, `support.js`) fully deleted from the working tree, unstaged — predating this
+session (this session never touched that directory). `DIRECTORY-TREE.md` explicitly marks it
+"reference only — KEEP-surfaces per its README." Left untouched rather than restored or removed
+unilaterally, since it's unclear whether the deletion was intentional; flagged for the user to
+decide.
+
 ## Known gaps / next up (not yet built)
 
-*(Nothing currently tracked here — the previous entry, multi-point waypoint redesign + file-level
-drag parity, shipped above. Continue `ROADMAP-V2.md`'s own promotion order: v2.1 Connection
-Inspector next.)*
+Nothing built yet for any of these — `ROADMAP-V2.md`'s promotion order, in sequence:
+
+1. **v2.1 — Connection Inspector**: click an edge → docked side-by-side panel, extends to
+   v2.0.1's inter-layer arrows now that they exist.
+2. **v2.2 — Agent-agnostic context & query layer**: extends the existing `blocknet analyze
+   --json` CLI with `trace`/`impact`/`path`/`risks` subcommands any AI agent can call
+   directly, plus a click-to-copy context handoff from the webview. `trace` and `risks` are
+   mostly wiring against data `core` already computes; `impact` and `path` need a new
+   reverse-reachability/chain-reconstruction traversal in `core` (no existing function does
+   this — `core/src/risks/cycles.ts`'s adjacency-map approach is the closest structural
+   model to build it on). BlockNet never renders its own AI chat/chip UI for this —
+   `PRINCIPLES.md`'s "We are the map, not the assistant" is binding.
+3. **v2.2.1 — Flow tracer**: click a block/file → "Run flow" greys out everything not on a
+   reachable path and animates a light pulse along the lit edges in import direction. Pure
+   rendering mode over v2.2's `impact`/`path` traversal output — cannot start before v2.2's
+   traversal exists.

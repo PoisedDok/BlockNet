@@ -16,10 +16,11 @@ A dev opens a repo, runs **BlockNet: Show Architecture**, and in seconds sees 8�
 with true connections; two red edges tell them the frontend hits the DB directly and two
 packages are circular. They double-click a block and see its files and intra-block imports,
 each with real LOC and an `● edited` marker. They click a red edge and see the exact import
-statements side by side. Everything they've clicked has become AI context chips; they ask
-"how do I fix this cycle?" and the model answers grounded in the actual files. ⤢ always
-opens the **real** editor, split screen. BlockNet never edits code silently — *it flags and
-explains structural risk and stages changes.*
+statements side by side. Meanwhile, whatever AI agent they already have open — Claude Code,
+Copilot, anything — can query the same ground truth directly (`blocknet trace`/`impact`/
+`path`, v2.2), so "how do I fix this cycle?" gets answered grounded in the actual files
+instead of a grep-guess. ⤢ always opens the **real** editor, split screen. BlockNet never
+edits code silently — *it flags and explains structural risk and stages changes.*
 
 v1 ships the macro layer of that. The rest lands in this order:
 
@@ -28,8 +29,10 @@ v1 ships the macro layer of that. The rest lands in this order:
 ## v2.0 — Micro view: dive into a block (the very next thing)
 
 **Status: shipped 2026-07-21** — see `docs/planning/PROGRESS-V2.md` for what was built, the
-two-pass review findings, and live-verification results. v2.1 (Connection Inspector) is next
-per this doc's own promotion order.
+two-pass review findings, and live-verification results. Superseded by v2.0.1 below (the
+per-block micro view described here no longer exists as a separate thing — every layer,
+including layer 0, is the unified model now). v2.0.1 shipped next, per this doc's own
+promotion order; v2.1 (Connection Inspector) is next after that.
 
 **What:** Double-click a block → cross-fade (~0.45–0.5s scale+opacity, per prototype) to
 its file-level graph: file cards with real **LOC**, **`● edited`** git-dirty marker, ⚠ risk
@@ -45,15 +48,16 @@ node count 10–100× and needs its own perf work (possibly d3-force organic lay
 the "Gource look" belongs at this layer if anywhere; sigma.js/graphology if file counts
 demand WebGL).
 
-## v2.0.1 — Directory-tree micro view: folders drill down too (Krish, 2026-07-21, before v2.1)
+## v2.0.1 — Directory-tree micro view: folders drill down too
 
-**Status:** planned, not started. Placed before v2.1 deliberately — it reshapes the model
-v2.1's Connection Inspector gets built against, so building the inspector first would mean
-rebuilding it immediately after this lands.
+**Status: shipped 2026-07-22** — see `docs/planning/PROGRESS-V2.md` for what was built, the
+two-pass review findings, and live-verification results. Sequenced before v2.1 — it reshapes
+the model v2.1's Connection Inspector gets built against, so building the inspector first would
+have meant rebuilding it immediately after this landed.
 
-**The gap this closes:** v2.0 shipped a FLAT per-block file list — confirmed by reading the
-current code: `core/src/analyze-micro.ts`'s `filesForBlock()` walks the WHOLE subtree under a
-block and returns every file as one flat `MicroFileNode[]` regardless of nesting depth;
+**The gap this closes:** v2.0 ships a FLAT per-block file list — `core/src/analyze-micro.ts`'s
+`filesForBlock()` walks the WHOLE subtree under a block and returns every file as one flat
+`MicroFileNode[]` regardless of nesting depth;
 `MicroFileNode` (`core/src/types.ts`) carries a `path` field but nothing that groups files by
 directory; `extension/webview/src/flow/file-layout.ts`'s `layoutFiles()` never reads that
 `path` — every file becomes one sibling dagre node, positioned purely by import edges. There
@@ -61,40 +65,193 @@ is no locked decision behind this (checked every ADR in `docs/decisions/` — no
 directory nesting in the micro view); it's an implementation gap in what v2.0 built, not a
 reversal of one.
 
-**What:** Diving into a block (or a folder one level down) shows its DIRECT children only:
-each subdirectory renders as its own drillable folder card (visually block-like, same
-double-click-to-dive interaction as a macro block), each direct-child file renders as a file
-leaf card exactly as today. Diving into a folder card recurses the identical view one level
-deeper. Breadcrumb generalizes from the current fixed `System Map / <block>` to an arbitrary-
-depth trail (`System Map / <block> / <folder> / <folder> / ...`), each segment clickable to
-jump back to that exact level — not just one "← zoom out" step.
+**What — unified layer model (decided):** every layer, from the repo root down through
+arbitrary directory depth, is architecturally identical — a stack of layers, one per real
+directory level, connected vertically in a literal (not decorative) sense: **intra-layer
+connections** are imports between two items rendered in the SAME layer (unchanged from
+today's in-layer edge behavior); **inter-layer connections** are imports crossing between
+layers (new — see below). Layer 0 (today's "macro" view) is NOT a special case: its item set
+is repo root's own direct children, exactly like any other layer, with ONE special case —
+whichever of those children AD-5 already decided is a detected block renders as a folder-card
+covering that block's WHOLE subtree in one card (still carrying `pills`/`fileCount`/
+`riskCount`, unchanged from today), even if the block's own path is several directories deep
+(e.g. `apps/web/frontend`). Every other direct child of repo root — a file not claimed by any
+block, or a plain directory not claimed by any block (e.g. `docs/`, with no `package.json` and
+never chosen by AD-5) — renders as an ordinary file-leaf-card or plain folder-card
+respectively, following the IDENTICAL recursive rule as any deeper layer: no pills, and if it's
+a folder, diving into it shows only ITS direct children next. This decomposes what today's
+synthetic `(root)` block flattens into one bucket back into real directory structure at
+render time. `resolveBlock()`'s internal `(root)` bucket is UNCHANGED as a DATA concept — it
+still exists for edge/risk attribution (a file's cross-block risk still needs a block id to
+attribute to) — only the RENDERING of those files changes, from one flat wrapper card to their
+real recursive folder/file structure. Diving into any folder-card (an AD-5 block or a plain
+subdirectory — no visual distinction once you're inside it) shows its DIRECT children only,
+same rule one level deeper: subdirectories → folder-cards, direct files → file-leaf-cards,
+recursively, no depth limit. The layer-stack floor-picker (below) replaces the current fixed
+`System Map / <block>` breadcrumb with one slab per real directory level from repo root to
+the current layer.
 
-**Cross-layer connections (the other half of this item):** an import can cross from a file
-several folders deep to a file that isn't a direct child of the currently-displayed layer
-(an ancestor folder's own file, a cousin branch's file, etc.). Each layer must render that as
-a visible "this connects to something outside this view" indicator — a faded/dashed stub
-edge at the boundary of the layer, distinct from a normal in-layer edge — so a user can see
-the connection exists and navigate (click the stub, or a breadcrumb segment) toward the real
-endpoint, rather than the edge silently vanishing because its other end isn't on screen.
-Exact visual treatment (edge stub vs. a small connection-count badge on the breadcrumb
-segment vs. something else) is UNDECIDED — needs a short design pass, not full-specced here;
-what's locked is the requirement itself (every cross-layer connection must be visible from
-both layers it touches, never silently dropped).
+**ADR-0005 compatibility, checked:** the synthetic `(root)` block's DATA requirement is
+unchanged and still locked — every file must resolve to something, never silently dropped
+(`decisions/0005`'s Decision section: "the alternative [dropping it] contradicts
+`docs/PRINCIPLES.md`'s truth requirement more than an ungainly extra node does"). What changes
+is rendering only: those files no longer need an extra click through a wrapper card to become
+visible; they render directly at layer 0, same as any other layer's direct-child files. If
+AD-5 detects zero blocks at all (a small flat repo), layer 0 degrades to exactly "the repo
+root as a folder" — direct subdirectories and files, no synthetic wrapper needed at all; the
+simpler case, not a harder one.
 
-**Engine implications (traced, not designed):** the repo-wide `FileEdge[]` `analyze()` already
-produces has every edge regardless of which folder either endpoint lives in — resolving "is
-this edge's other endpoint inside or outside the current layer" is a scoping/filtering
-question against data that already exists, not new import-extraction work. What's missing is
-a grouping concept above `MicroFileNode` (a folder-level node) and a query answering "for this
-exact folder scope, which edges stay fully inside vs. cross the boundary."
+**Inter-layer connections (decided):** an import can cross from a file several directory
+levels deep to a file that isn't rendered in the currently-displayed layer (an ancestor's own
+file, a cousin branch's file, a file inside a not-yet-drilled sibling folder-card, etc.). Each
+such edge renders as a small clickable arrow at the edge of its source card — never a stub
+reaching nowhere, never silently dropped. Direction is depth-relative, not tree-relative: if
+the target file's path is deeper than the currently-displayed layer, the arrow points down; if
+shallower (reached only by walking back up), it points up. A same-depth target in a different
+branch (a cousin file) points up, since the common ancestor must be reached first — there is no
+lateral arrow variant. Multiple edges from different visible items to the SAME off-screen
+target file collapse into one arrow, labeled with the target's filename (elevator-call
+semantics: many requests for one floor become one indicator); edges to DISTINCT off-screen
+targets render as distinct, separately labeled arrows. Clicking an arrow navigates the layer
+stack straight to the target's folder and selects the target file — no manual walk
+up-then-down required.
 
-**State implications (flagged, not designed):** `GraphView.tsx`'s view-state is currently a
-fixed 3-phase machine, `'macro' | 'diving' | 'micro'` — one level of micro, hardcoded. This
-generalizes to an arbitrary-depth stack of active path segments. `blocknet.filePositions` /
-`blocknet.fileEdgeWaypoints` (`extension/src/state.ts`) are currently scoped per BLOCK — an
-arbitrary-depth model needs these scoped per exact folder path instead, or two files in
-different subfolders could collide on the same relative node id. Needs real design before
-implementation; not decided here.
+**Engine implications, generalized (this is the actual unifying insight):** intra-layer edge
+aggregation and inter-layer arrow aggregation are the SAME underlying operation, not two. Both
+start from the repo-wide `FileEdge[]` `analyze()` already produces, and both group raw edges by
+which rendered item (a file-leaf or a folder-aggregate) each endpoint resolves to AT THE
+CURRENT LAYER — then split the result: both endpoints resolve inside the current layer's item
+set → intra-layer edge; exactly one resolves outside → inter-layer arrow. This one generalized
+"resolve edges against a layer's item boundaries" function replaces what are currently two
+separate ad hoc Map-keyed-by-pair implementations — `aggregateFileEdges()`
+(`core/src/analyze-micro.ts`, file→file only) and `aggregateToBlockEdges()`
+(`core/src/edges/block-aggregate.ts`, file→block only) — neither handles the mixed
+file-leaf/folder-aggregate item sets a real layer has once folders and loose files coexist.
+Building a third bespoke function for inter-layer arrows, instead of this one shared
+generalization, would be exactly the kind of duplicated-formula drift `edge-path.ts`'s
+`controlPointOffset()` comment already warns against for a different mechanism — same
+principle applies here.
+
+**Layer-stack navigator (decided, replaces the plain breadcrumb):** a small fixed floor-picker
+widget docked top-left of the canvas — the same interaction pattern as Google Maps' indoor
+floor-level picker: a vertical stack of rounded slab buttons, one per depth level from the
+REPO root (layer 0, not a block) down to the current layer, current layer highlighted.
+Hovering a slab previews it (name + file/folder count); clicking jumps straight to that depth.
+Flat 2D styling (shadow/layering for depth cues), not a 3D perspective scene. `StatusBar.tsx`'s
+current two-level breadcrumb (`System Map` / one block name, hardcoded — confirmed, no
+multi-level support exists there today) is replaced by this widget, not kept alongside it.
+
+**State implications (corrected):** `GraphView.tsx`'s view-state is a fixed 3-phase machine,
+`'macro' | 'diving' | 'micro'` (confirmed, `GraphView.tsx` ~L70) — this generalizes to an
+arbitrary-depth stack of active path segments, starting at layer 0 (repo root) rather than
+treating the block level as a separate phase before the stack begins; `StatusBar.tsx`'s
+breadcrumb prop (hardcoded to exactly one ancestor level, confirmed) is subsumed by the
+layer-stack navigator above, not generalized in place.
+
+**State keying, generalized (resolves an open question):** folder-card positions use the
+identical global-unique-by-path keying already proven correct for file positions
+(`state.ts`'s `filePositions`) — a folder's own repo-relative path as its id, added to the
+SAME position map rather than a new one, since a detected block's id is itself already just a
+repo-relative path in every case except the synthetic `(root)` block (which no longer needs a
+position once its files render inline at layer 0 — see above). `blocknet.filePositions` /
+`blocknet.fileEdgeWaypoints` (`extension/src/state.ts`) do NOT need rekeying for files —
+confirmed by reading `state.ts`: both are already keyed by full repo-relative file id, globally
+unique across every block and folder. An earlier draft of this note claimed they were
+block-scoped and at risk of collision; that claim was wrong, checked against the actual code,
+and is corrected here. `blocknet.edgeWaypoints` / `blocknet.fileEdgeWaypoints` unify into one
+waypoint map for all intra-layer edges by the same reasoning already established for edge ids
+(pure function of `(source,target)`, stable across re-analysis, `decisions/`-adjacent finding
+from this session) — not two separate maps split by macro/micro, since that split no longer
+means anything under the unified model.
+
+**Doc-stack card (decided) — real-repo-motivated, not hypothetical:** this repo's own `docs/`
+tree is the exact failure case: a folder with dozens of small one-concept files (CLAUDE.md's
+own documentation discipline) would otherwise render as a long vertical pile of near-identical
+file-leaf-cards. Within any folder's layer, if its DIRECT children include MORE THAN ONE file
+matching a documentation extension (`.md`, `.mdx`, `.markdown`, `.txt`, `.rst`, `.adoc` —
+extension-only, see below for why), those files collapse into ONE indicator, visually scaled
+to count: 2-3 files renders as a compact stacked-card (2-3 overlapping rounded rectangles,
+offset, count badge, reusing the SAME stacked-slab visual language as the layer-stack
+floor-picker); MORE than 3 renders sized and styled like a full folder-block card (matching
+the width/prominence of a real folder-card, not a dispersed small icon among them) — the
+visual scales up with volume so a real `docs/`-sized cluster reads as "a meaningful group,"
+not clutter, while still being exactly one card, never a pile. Either size uses the IDENTICAL
+click behavior: a popover, never a layer dive — this is not a folder-card pretending to be a
+folder, it's a compact list surfaced inline. A single loose doc file (count exactly 1) still
+renders as an ordinary file-leaf-card; the grouped indicator only replaces what would
+otherwise be a real pile. Clicking it opens a fixed-position
+overlay popover that MIRRORS THE EXISTING `RiskPopover.tsx` PATTERN exactly (confirmed by
+reading it — a lightweight overlay, explicitly NOT the unbuilt v2.1 Connection Inspector),
+listing every file in the stack with one row each, a button per row posting
+`{type: 'open/file', fileId}` to the host exactly like `RiskPopover`'s evidence rows — opening
+the REAL file in the REAL editor (`decisions/0009` unaffected, nothing new rendered in-webview).
+
+**Why extension-only, not "zero import edges":** doc files never appear in `FileEdge[]`
+regardless of any heuristic (dependency-cruiser doesn't parse prose), so "zero edges" is NOT a
+usable signal here — a genuinely isolated real source file (a leaf utility, a standalone
+script with no imports and no importers) also has zero edges and must NOT get swept into a
+"docs" bucket just for being edge-less. Classification is extension-only, on purpose.
+
+**Folder-card metadata, generalized:** every folder-card, whether an AD-5-detected block or a
+plain subdirectory, shows `fileCount` (its own subtree's real file count) and an aggregated
+risk indicator (⚠ if ANY risk exists anywhere in its subtree — same badge language as today's
+block risk pill, just recursive instead of one-level). `pills` (category tags like
+`frontend`/`api`) stay an AD-5-only concept — a plain subdirectory folder-card shows no pills
+row; a bare directory name carries no architectural-category meaning AD-5 never assigned it.
+
+**Inter-layer direction, precise rule (resolves an ambiguity):** "depth" means path-segment
+count from repo root, not literal one-hop reachability. Down = target's path has strictly more
+segments than the currently-displayed layer's path; up = fewer, OR equal (a cousin branch at
+the SAME segment count still shows up, per the earlier rule, since ascent to a common ancestor
+is required regardless of the cousin's own depth). This is a directional hint orienting the
+user toward "shallower" vs. "deeper" in the stack, not a promise the arrow leads to a direct
+child — clicking it always resolves and navigates through the real path regardless of which
+way it pointed.
+
+**Known risk, not yet validated:** a layer with many files each pointing to many DISTINCT
+off-screen targets could produce visual clutter — one arrow per distinct target is the decided
+design, and nothing bounds that count today. No fallback is designed yet. If real-repo
+validation (this project's own standing Checkpoint-style discipline) shows this is noisy, the
+fallback is folder-level collapsing — all arrows into one off-screen folder's subtree collapse
+to a single arrow, mirroring the existing per-node `connectionCounts()` badge pattern
+(`graph-derive.ts`) — not designed now, flagged so it isn't a surprise discovered late.
+
+**Inter-layer arrows do not support waypoint dragging** — a static, aggregated indicator
+(label + direction + click-to-navigate), not a routable edge. `RiskEdge.tsx`'s ~150 lines of
+waypoint-gesture machinery are irrelevant here (confirmed by this session's code survey); a
+separate, much smaller component renders inter-layer arrows, sharing only `edge-path.ts`'s
+geometry helpers where relevant, not `RiskEdge.tsx` itself.
+
+**Git-dirty markers, generalized (resolves a real gap, checked against the actual code):**
+today's two mechanisms are `dirtyBlockIds()` (`extension/src/dirty-blocks.ts:26`, path-prefix
+match, called for macro blocks only) and an inlined exact-file-id-membership check
+(`extension/src/commands/show-architecture.ts:98-99`, micro files only). `dirtyBlockIds()` is
+already genuinely generic — its signature takes `{id, path}[]`, nothing block-specific — so
+folder-cards at any layer/depth reuse it unchanged, just called with that layer's folder-cards
+instead of only top-level blocks. File-leaf-cards at any layer reuse the existing exact-membership
+check unchanged. This also fixes a pre-existing documented gap for free: `dirty-blocks.ts:19-24`'s
+own comment notes the synthetic `(root)` block never gets a dirty marker today — once its files
+render as file-leaves instead of being wrapped in that block, they pick up a correct marker via
+the same exact-membership path every other file-leaf already uses.
+
+**Process-boundary judgment call, flagged for live measurement:** `decisions/0011` mandates
+`child_process.fork()` for analysis work, reasoning explicitly from infrequency ("on-save, not
+on-keystroke... fork overhead is irrelevant") — that reasoning doesn't automatically extend to
+layer navigation, which will be triggered far more often (drilling through folders, floor-picker
+clicks) than one block double-click. `itemsForLayer()`/`resolveLayerConnections()` themselves are
+pure, fast, synchronous, non-I/O — not the concern; `walkRealFiles()` (a real, synchronous
+disk walk `analyze-micro.ts` already calls per micro-dive, calling it "bounded") IS a real
+blocking-the-host-thread risk (CLAUDE.md's own extension standard #10) if run in-process,
+same reason it's forked today. The whole-repo file list is NOT currently persisted anywhere
+(checked `analyze.ts`/`cache/store.ts` — only COUNTS survive past the walk, not the list
+itself), so avoiding the walk entirely would mean a real cache-schema change, not a small one.
+Decision: mirror the existing, proven `runMicro`/fork pattern exactly for `graph/layer/request`
+now (minimal new complexity, reuses tested machinery) rather than build a new persistence
+mechanism to solve a latency problem that hasn't been measured yet — "measure, then decide"
+cuts against guessing in EITHER direction. Explicitly flagged for the live-verification todo:
+if drilling through several folder levels in the REAL extension host (not the Vite dev server,
+which never touches the fork path at all) feels sluggish, persisting the walked file list in
+the cache payload is the fix, done then, with real data, not now, speculatively.
 
 **Why this order:** v2.1's Connection Inspector (below) should open from ANY edge click,
 including a cross-layer stub — sequencing this first means the inspector is built once,
@@ -118,17 +275,14 @@ carries — designed forward on purpose. Host resolves edge → endpoint ranges 
 editor. Diff tokens if we render our own read-only diff: add `#86c79a` on
 `rgba(96,168,120,.12)`, del `#f0888a` on `rgba(239,68,68,.11)`.
 
-## v2.2 — Agent-agnostic context & query layer (rewritten 2026-07-21, was "AI context chips + chat participant")
+## v2.2 — Agent-agnostic context & query layer
 
-**Status:** planned, not started. This entry replaces its own earlier version outright —
-the earlier version described BlockNet building its own in-UI AI chat/chip/Copilot-dock
-surface. That's now a locked non-goal, not a deferred one — see `PRINCIPLES.md`'s "We are
-the map, not the assistant." BlockNet computes and renders ground truth; it never hosts the
-AI conversation itself. Every dev this matters to already has an agent open somewhere
-(Claude Code, Copilot, Cursor, whatever) — the gap isn't "no chat surface," it's that those
-agents currently reconstruct cross-file structure via grep, which is fast but not exact
-(misses barrel-file re-exports, path aliases, dynamic imports; a real import-graph analyzer
-— which `core` already is, `decisions/0002` — resolves all of that correctly).
+**Status:** planned, not started. BlockNet computes and renders ground truth; it never
+hosts an AI conversation itself (`PRINCIPLES.md`'s "We are the map, not the assistant").
+Every dev this matters to already has an agent open somewhere (Claude Code, Copilot,
+Cursor, whatever) — the gap is that those agents reconstruct cross-file structure via grep,
+which misses barrel-file re-exports, path aliases, and dynamic imports; a real import-graph
+analyzer resolves all of that correctly, and `core` already is one (`decisions/0002`).
 
 **What, two halves:**
 1. **A `blocknet` CLI query surface**, extending the existing `blocknet analyze <path>
@@ -169,6 +323,28 @@ one language — a dev working with an AI agent should never be one grep-guess a
 wrong mental model of their own codebase, in whatever stack they're in. `core`'s aggregator
 design (`decisions/0003`) was chosen specifically so this generalizes — v2.5's Python/LSP
 work extends the SAME `fileEdges`/risk model this query layer reads from, not a parallel one.
+
+## v2.2.1 — Flow tracer: animated data-path visualization
+
+**Status:** planned, not started. Depends on v2.2's `impact`/`path` transitive-reachability
+traversal — cannot be built before that traversal exists in `core`; sequenced directly after
+v2.2, not folded into it and not part of v2.0.1.
+
+**What:** click any block or file card → a "Run flow" affordance. On activation: every node
+and edge NOT on a reachable path to/from the clicked node dims to low-opacity grey; every node
+and edge that IS on the path stays fully lit, and an animated pulse of light travels along each
+lit edge in the actual import direction (source → target) — so a user can watch how data/
+imports actually move through the system, not just infer that a connection exists.
+
+**Engine:** reuses v2.2's `impact` (reverse reachability) and `path` (forward reachability)
+traversals directly — a rendering mode over data those subcommands already compute, not new
+graph analysis. No new core traversal beyond what v2.2 already needs to build.
+
+**Why sequenced after v2.2, not folded into it:** v2.2's traversal IS the data this needs;
+building the animation before that traversal exists would mean mocking the same computation
+twice. **Why not part of v2.0.1:** that item is structural navigation (folder drill-down,
+cross-layer visibility); this is execution/data-flow tracing — different problem, different
+UI surface, gated on a different dependency, not bundled just because both touch the canvas.
 
 ## v2.3 — Command palette + camera fly
 
@@ -236,19 +412,15 @@ pretty-picture territory (the Gource trap). Funnel, not tool.
   both before committing; blocks stay the primitive (legibility beat beauty in the v1 call).
 - Monetization: free OSS now (AD-10); freemium (paid AI/team features) is the natural line
   *if* retention proves out — decide on data, not upfront.
-- **Draggable/bendable edge routing** (Krish, 2026-07-21): ✅ shipped 2026-07-21, same day as
-  scoped, then revised same session from a single fixed midpoint to full **multi-point**
-  routing — grab the line anywhere to drop a new bend, drag any existing bend, drag one back
-  near the straight line between its neighbors to remove it. Each handle is rendered through
-  React Flow's `EdgeLabelRenderer`; the full waypoint array persists in
-  `context.workspaceState` (`blocknet.edgeWaypoints`, macro; `blocknet.fileEdgeWaypoints`,
-  micro) via the `state.ts` sparse-override pattern this note originally guessed at. See
-  `docs/planning/PROGRESS-V2.md` for the full build record, including seven real bugs found
-  via live Playwright testing and two further architectural-review passes. The
-  coincident-midpoint limitation this note originally accepted is CLOSED, not just noted:
-  `graph-derive.ts`'s `siblingOffsets()` now gives every edge between the same node pair
-  (either direction) a distinct, stable rendering offset before any waypoint exists, so two
-  reciprocal edges never render as literally overlapping curves.
+- **Draggable/bendable edge routing:** ✅ shipped. Full multi-point routing — grab the line
+  anywhere to drop a new bend, drag any existing bend, drag one back near the straight line
+  between its neighbors to remove it. Each handle renders through React Flow's
+  `EdgeLabelRenderer`; the full waypoint array persists in `context.workspaceState`
+  (`blocknet.edgeWaypoints`, macro; `blocknet.fileEdgeWaypoints`, micro) via `state.ts`'s
+  sparse-override pattern. See `docs/planning/PROGRESS-V2.md` for the build record. Two
+  edges between the same node pair never render as overlapping curves: `graph-derive.ts`'s
+  `siblingOffsets()` gives every such edge (either direction) a distinct, stable rendering
+  offset before any waypoint exists.
 
 ---
 
