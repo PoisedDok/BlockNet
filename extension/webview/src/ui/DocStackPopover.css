@@ -1,0 +1,85 @@
+.bn-docstack-popover {
+  position: absolute;
+  /* Same 70px = 54px status bar + 16px gap as RiskPopover.css's identical reasoning. */
+  top: 70px;
+  right: 16px;
+  z-index: 15;
+  width: 280px;
+  max-height: calc(100% - 86px);
+  overflow-y: auto;
+  padding: 14px 16px;
+  background: var(--bn-card-bg);
+  border: 1px solid var(--bn-border);
+  border-radius: var(--bn-radius-card);
+  box-shadow: var(--bn-shadow-card);
+  font-family: var(--bn-font-ui);
+  color: var(--bn-text-body);
+}
+
+.bn-docstack-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.bn-docstack-popover-title {
+  font-family: var(--bn-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--bn-text-primary);
+}
+
+.bn-docstack-popover-close {
+  border: none;
+  background: transparent;
+  color: var(--bn-text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.bn-docstack-popover-close:hover,
+.bn-docstack-popover-close:focus-visible {
+  color: var(--bn-text-primary);
+}
+
+.bn-docstack-popover-files {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--bn-border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bn-docstack-popover-file {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 4px 0;
+  font-family: var(--bn-font-mono);
+  font-size: 12px;
+  color: var(--bn-text-muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 2px;
+  transition: color 0.15s ease, text-decoration-color 0.15s ease;
+}
+
+.bn-docstack-popover-file:hover,
+.bn-docstack-popover-file:focus-visible {
+  color: var(--bn-text-primary);
+  text-decoration-color: currentColor;
+}
+
+.bn-docstack-popover-file:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, var(--bn-border-selected));
+  outline-offset: 2px;
+}
