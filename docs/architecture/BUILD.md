@@ -16,10 +16,11 @@ flowchart LR
 
 ## Why three, not one
 
-- `core` is built by `tsup` because it emits three separate entrypoints
-  (`index`, `cli`, `ipc-worker` — see
-  [PROCESS-BOUNDARY.md](./PROCESS-BOUNDARY.md)) as importable/executable JS, not a single
-  bundle.
+- `core` is built by `tsup` because it emits four separate entrypoints
+  (`index`, `cli`, `ipc-worker` — see [PROCESS-BOUNDARY.md](./PROCESS-BOUNDARY.md) — and
+  `path-utils`, its own dedicated export so `extension/src/watcher.ts` can import
+  `isExcludedPath` without pulling in `analyze.ts`'s dependency-cruiser graph) as
+  importable/executable JS, not a single bundle.
 - `extension/src` is built by `esbuild` with `vscode` marked external — it runs inside the
   extension host process, which already provides that module.
 - `extension/webview/src` is built by `vite` as a standalone web app — it runs inside an
