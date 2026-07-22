@@ -86,24 +86,22 @@ export class ArchitecturePanel {
   // back).
   #currentGeneration: string | undefined;
 
-  // onLayoutPersist/onOpenFile/onMicroRequest/onFileLayoutPersist are wired once, here, at
-  // construction only — the reveal path in createOrReveal below deliberately doesn't re-wire
-  // them. Safe to skip: all four callbacks are stateless w.r.t. which invocation constructed
-  // vs. revealed the panel (each closes over state that outlives the whole extension lifetime
-  // — context.workspaceState / rootDir / the AnalysisRunner), so registering them a second
-  // time on reveal would only produce duplicate listeners firing twice per action — harmless
-  // (idempotent for both layout/persist and layout/file-persist; open/file's second
-  // showTextDocument call is a no-op focus-follow; a duplicate graph/micro/request just forks
-  // a second, superseded micro analysis the dual-generation gate already discards) but sloppy,
-  // and avoidable for free.
+  // onLayoutPersist/onOpenFile/onLayerRequest are wired once, here, at construction only — the
+  // reveal path in createOrReveal below deliberately doesn't re-wire them. Safe to skip: all
+  // three callbacks are stateless w.r.t. which invocation constructed vs. revealed the panel
+  // (each closes over state that outlives the whole extension lifetime —
+  // context.workspaceState / rootDir / the AnalysisRunner), so registering them a second time
+  // on reveal would only produce duplicate listeners firing twice per action — harmless
+  // (idempotent for layout/persist; open/file's second showTextDocument call is a no-op
+  // focus-follow; a duplicate graph/layer/request just forks a second, superseded analysis the
+  // dual-generation gate already discards) but sloppy, and avoidable for free.
   private constructor(
     panel: vscode.WebviewPanel,
     state: PanelState,
     extensionUri: vscode.Uri,
     onLayoutPersist: (positions: Record<string, Position>, edgeWaypoints: Record<string, Position[]>) => void,
     onOpenFile: (fileId: string, line?: number) => void,
-    onMicroRequest: (blockId: string) => void,
-    onFileLayoutPersist: (filePositions: Record<string, Position>, fileEdgeWaypoints: Record<string, Position[]>) => void,
+    onLayerRequest: (layerPath: string) => void,
   ) {
     this.#panel = panel;
     this.#currentGeneration = state === 'ready' ? nonce() : undefined;
@@ -112,25 +110,23 @@ export class ArchitecturePanel {
     this.#panel.webview.onDidReceiveMessage(
       (message: WebviewMessage) => {
         if (message.type === 'layout/persist') onLayoutPersist(message.positions, message.edgeWaypoints);
-        if (message.type === 'layout/file-persist') onFileLayoutPersist(message.filePositions, message.fileEdgeWaypoints);
         if (message.type === 'open/file') onOpenFile(message.fileId, message.line);
-        if (message.type === 'graph/micro/request') onMicroRequest(message.blockId);
+        if (message.type === 'graph/layer/request') onLayerRequest(message.layerPath);
       },
       undefined,
       this.#disposables,
     );
   }
 
-  /** onLayoutPersist/onOpenFile/onMicroRequest/onFileLayoutPersist are only actually used the
-   * first time a given panel is constructed — see the constructor's own comment for why the
-   * reveal path below ignores them safely. */
+  /** onLayoutPersist/onOpenFile/onLayerRequest are only actually used the first time a given
+   * panel is constructed — see the constructor's own comment for why the reveal path below
+   * ignores them safely. */
   static createOrReveal(
     state: PanelState,
     extensionUri: vscode.Uri,
     onLayoutPersist: (positions: Record<string, Position>, edgeWaypoints: Record<string, Position[]>) => void,
     onOpenFile: (fileId: string, line?: number) => void,
-    onMicroRequest: (blockId: string) => void,
-    onFileLayoutPersist: (filePositions: Record<string, Position>, fileEdgeWaypoints: Record<string, Position[]>) => void,
+    onLayerRequest: (layerPath: string) => void,
   ): ArchitecturePanel {
     if (ArchitecturePanel.#current !== undefined) {
       const instance = ArchitecturePanel.#current;
@@ -148,7 +144,7 @@ export class ArchitecturePanel {
       return instance;
     }
     const panel = vscode.window.createWebviewPanel('blocknet.architecture', 'BlockNet: Architecture', vscode.ViewColumn.Active, webviewOptions(state, extensionUri));
-    const instance = new ArchitecturePanel(panel, state, extensionUri, onLayoutPersist, onOpenFile, onMicroRequest, onFileLayoutPersist);
+    const instance = new ArchitecturePanel(panel, state, extensionUri, onLayoutPersist, onOpenFile, onLayerRequest);
     ArchitecturePanel.#current = instance;
     return instance;
   }
