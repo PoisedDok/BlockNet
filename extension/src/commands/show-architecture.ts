@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
-import type { AnalysisOutcome, AnalysisRunner, MicroOutcome } from '../analysis-runner.js';
+import type { AnalysisOutcome, AnalysisRunner, LayerOutcome } from '../analysis-runner.js';
 import { resolveCacheDir } from '../cache-bridge.js';
 import { dirtyBlockIds } from '../dirty-blocks.js';
 import { getDirtyFiles } from '../git.js';
 import { ArchitecturePanel } from '../panel.js';
-import { getEdgeWaypoints, getFileEdgeWaypoints, getFilePositions, getPositions, setEdgeWaypoints, setFileEdgeWaypoints, setFilePositions, setPositions } from '../state.js';
+import { getEdgeWaypoints, getPositions, setEdgeWaypoints, setPositions } from '../state.js';
 import type { WatcherTrigger } from '../watcher.js';
 import { FileWatcher } from '../watcher.js';
 import { handleOpenFile } from './open-file.js';
@@ -70,46 +70,57 @@ function triggerAnalysis(runner: AnalysisRunner, panel: ArchitecturePanel, optio
     });
 }
 
-/** Forks one micro (file-level) run for a single block double-click (docs/planning/
- * ROADMAP-V2.md's v2.0). Same dual-generation gate as triggerAnalysis above — `runner.
- * isLatestMicro()` (is this still the newest MICRO request? independent counter from macro's,
- * see analysis-runner.ts's own comment) and `panel.isCurrentGeneration()` (is the webview
- * script this would post into still the one actually listening?) — captured/checked the same
- * way, because the identical stale-post race applies here too: a rapid second double-click
- * before the first's forked worker returns must never let the first's late response land after
- * the second's.
+/** Forks one layer (item/edge/arrow) query for a folder navigation (docs/planning/
+ * ROADMAP-V2.md's v2.0.1 unified layer model) — every layer, including layer 0, goes through
+ * this one path now. Same dual-generation gate as triggerAnalysis above, against
+ * runner.isLatestLayer() (this stream's OWN independent counter — analysis-runner.ts's own
+ * comment on why it can't share the macro counter) and panel.isCurrentGeneration().
  *
  * Unlike triggerAnalysis, a failure here does NOT go through vscode.window.showErrorMessage —
- * it's local to the block the user just dove into (a missing cache, a since-removed blockId),
- * not a whole-panel failure, so it's posted back as `graph/micro/error` instead, letting the
- * webview fall back to the macro view with an inline notice rather than a global toast plus a
- * webview stuck mid-transition with nothing to correct it (PROTOCOL.md). */
-function triggerMicroAnalysis(runner: AnalysisRunner, panel: ArchitecturePanel, options: { rootDir: string; cacheDir: string; blockId: string }): void {
+ * it's local to the layer the user just navigated to (a missing cache, a since-removed
+ * layerPath), not a whole-panel failure, so it's posted back as `graph/layer/error` instead,
+ * letting the webview fall back to the previous layer with an inline notice rather than a
+ * global toast plus a webview stuck mid-transition with nothing to correct it (PROTOCOL.md).
+ *
+ * Dirty markers reuse dirty-blocks.ts's dirtyBlockIds() UNCHANGED for folder items — it was
+ * already generically typed ({id,path}[]), never block-specific, just narrowly called until
+ * now — and exact-file-id-membership for file items. */
+function triggerLayerAnalysis(runner: AnalysisRunner, panel: ArchitecturePanel, options: { rootDir: string; cacheDir: string; layerPath: string }): void {
   const panelGeneration = panel.currentGeneration;
-  const { generation, result } = runner.runMicro(options);
+  const { generation, result } = runner.runLayer(options);
 
   result
-    .then(async (outcome: MicroOutcome) => {
-      if (!runner.isLatestMicro(generation)) return;
+    .then(async (outcome: LayerOutcome) => {
+      if (!runner.isLatestLayer(generation)) return;
       if (outcome.kind === 'success') {
-        // Dirty markers (STATE-OWNERSHIP.md: queried live, never cached) — direct membership
-        // at file granularity, unlike dirty-blocks.ts's path-prefix aggregation for blocks;
-        // getDirtyFiles never throws (git.ts degrades to [] on any failure).
-        const dirtySet = new Set(await getDirtyFiles(options.rootDir));
-        const files = outcome.micro.files.map((f) => ({ ...f, dirty: dirtySet.has(f.id) }));
-        if (!runner.isLatestMicro(generation) || !panel.isCurrentGeneration(panelGeneration)) return;
-        panel.post({ type: 'graph/micro', blockId: outcome.micro.blockId, files, edges: outcome.micro.edges });
+        const dirtyFiles = await getDirtyFiles(options.rootDir);
+        const dirtySet = new Set(dirtyFiles);
+        const dirtyFolders = dirtyBlockIds(
+          outcome.layer.items.filter((i) => i.kind === 'folder'),
+          dirtyFiles,
+        );
+        // A doc-stack has no single path of its own to check — it's dirty if ANY of its own
+        // constituent files is (exact-membership, the same check file items use, just applied
+        // across the whole set instead of one path). Missing this case would silently always
+        // report `dirty: false` for a doc-stack, since it's neither a 'file' nor a 'folder'.
+        const items = outcome.layer.items.map((item) => {
+          if (item.kind === 'file') return { ...item, dirty: dirtySet.has(item.path) };
+          if (item.kind === 'folder') return { ...item, dirty: dirtyFolders.has(item.id) };
+          return { ...item, dirty: item.files.some((f) => dirtySet.has(f.path)) };
+        });
+        if (!runner.isLatestLayer(generation) || !panel.isCurrentGeneration(panelGeneration)) return;
+        panel.post({ type: 'graph/layer', layerPath: outcome.layer.layerPath, items, edges: outcome.layer.edges, arrows: outcome.layer.arrows });
       } else {
         console.error(outcome.message);
         if (!panel.isCurrentGeneration(panelGeneration)) return;
-        panel.post({ type: 'graph/micro/error', blockId: options.blockId, message: outcome.message.split('\n')[0] ?? outcome.message });
+        panel.post({ type: 'graph/layer/error', layerPath: options.layerPath, message: outcome.message.split('\n')[0] ?? outcome.message });
       }
     })
     .catch((err: unknown) => {
-      if (!runner.isLatestMicro(generation) || !panel.isCurrentGeneration(panelGeneration)) return;
+      if (!runner.isLatestLayer(generation) || !panel.isCurrentGeneration(panelGeneration)) return;
       const message = err instanceof Error ? err.message : String(err);
       console.error(err);
-      panel.post({ type: 'graph/micro/error', blockId: options.blockId, message });
+      panel.post({ type: 'graph/layer/error', layerPath: options.layerPath, message });
     });
 }
 
@@ -133,19 +144,18 @@ export function registerShowArchitectureCommand(context: vscode.ExtensionContext
     const folders = vscode.workspace.workspaceFolders;
 
     // No script ever runs for these two degrade states (enableScripts: false), so there's no
-    // webview to post layout/persist, open/file, graph/micro/request, or layout/file-persist
-    // back — all four callbacks are unreachable, not just unused.
+    // webview to post layout/persist, open/file, or graph/layer/request back — all three
+    // callbacks are unreachable, not just unused.
     const noopOnLayoutPersist = () => {};
     const noopOnOpenFile = () => {};
-    const noopOnMicroRequest = () => {};
-    const noopOnFileLayoutPersist = () => {};
+    const noopOnLayerRequest = () => {};
 
     if (folders === undefined || folders.length === 0) {
-      ArchitecturePanel.createOrReveal('no-workspace', context.extensionUri, noopOnLayoutPersist, noopOnOpenFile, noopOnMicroRequest, noopOnFileLayoutPersist);
+      ArchitecturePanel.createOrReveal('no-workspace', context.extensionUri, noopOnLayoutPersist, noopOnOpenFile, noopOnLayerRequest);
       return;
     }
     if (folders.length > 1) {
-      ArchitecturePanel.createOrReveal('multi-root', context.extensionUri, noopOnLayoutPersist, noopOnOpenFile, noopOnMicroRequest, noopOnFileLayoutPersist);
+      ArchitecturePanel.createOrReveal('multi-root', context.extensionUri, noopOnLayoutPersist, noopOnOpenFile, noopOnLayerRequest);
       return;
     }
 
@@ -176,15 +186,8 @@ export function registerShowArchitectureCommand(context: vscode.ExtensionContext
       (fileId, line) => {
         void handleOpenFile(rootDir, fileId, line);
       },
-      (blockId) => {
-        triggerMicroAnalysis(runner, panel, { rootDir, cacheDir, blockId });
-      },
-      (filePositions, fileEdgeWaypoints) => {
-        // File-level drag parity (ROADMAP-V2.md) — same two-separate-memento.update()-calls
-        // posture as the macro onLayoutPersist callback above, and the same accepted, real
-        // limit: view state, not import truth, so a lost write just means a drag needs redoing.
-        void setFilePositions(context.workspaceState, filePositions);
-        void setFileEdgeWaypoints(context.workspaceState, fileEdgeWaypoints);
+      (layerPath) => {
+        triggerLayerAnalysis(runner, panel, { rootDir, cacheDir, layerPath });
       },
     );
 
@@ -210,8 +213,6 @@ export function registerShowArchitectureCommand(context: vscode.ExtensionContext
         type: 'layout/restore',
         positions: getPositions(context.workspaceState),
         edgeWaypoints: getEdgeWaypoints(context.workspaceState),
-        filePositions: getFilePositions(context.workspaceState),
-        fileEdgeWaypoints: getFileEdgeWaypoints(context.workspaceState),
       });
       triggerAnalysis(runner, panel, { rootDir, cacheDir });
     });
