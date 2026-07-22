@@ -50,20 +50,23 @@ BlockNet/
 │   │   ├── types.ts                  # see DATA-MODEL.md
 │   │   ├── analyze.ts                # orchestrator: detect() → runEdges() → runRisks() →
 │   │   │                             #   cache.write() → GraphResult
-│   │   ├── analyze-micro.ts          # v2.0 (ROADMAP-V2.md): a single block's file-level
-│   │   │                             #   graph, computed entirely from the LAST macro run's
-│   │   │                             #   cache (cache/store.ts's persisted fileEdges) — never
-│   │   │                             #   a fresh dependency-cruiser cruise. One whole-repo
-│   │   │                             #   walkRealFiles(rootDir) filtered by resolveBlock() —
-│   │   │                             #   matches analyze.ts's computeBlockShape() exactly (a
-│   │   │                             #   per-block-scoped walk diverged on nested blocks and
-│   │   │                             #   cross-block symlinks, both found via real-repo
-│   │   │                             #   verification) — for real LOC (skipped, degrades to 0,
-│   │   │                             #   for anything over 2MB), re-runs risks/cycles.ts's
-│   │   │                             #   findCyclicFileEdges() UNFILTERED (unlike risks/
-│   │   │                             #   index.ts, which only keeps the crossing portion for
-│   │   │                             #   the macro graph — this is deliberately that same-block
-│   │   │                             #   territory, see risks/index.ts's own header comment)
+│   │   ├── analyze-layer.ts          # v2.0.1 unified layer model (ROADMAP-V2.md): one layer's
+│   │   │                             #   full rendered shape (items + intra-layer edges +
+│   │   │                             #   inter-layer arrows), computed entirely from the LAST
+│   │   │                             #   macro run's cache — never a fresh dependency-cruiser
+│   │   │                             #   cruise. Wires edges/layer-items.ts (item boundaries)
+│   │   │                             #   and edges/layer-connections.ts (edge resolution)
+│   │   │                             #   together, adds per-item card metadata (real LOC,
+│   │   │                             #   skipped/degrades to 0 over 2MB; reuses a matching
+│   │   │                             #   block's own authoritative pills/fileCount/riskCount
+│   │   │                             #   when isBlock, else computes a plain folder's own
+│   │   │                             #   subtree count directly), and groupDocFiles() (collapses
+│   │   │                             #   >1 loose doc-extension file at a layer into one
+│   │   │                             #   LayerDocStackItem). Risk scoping is GLOBAL, not
+│   │   │                             #   block-scoped — a layer can mix items from several
+│   │   │                             #   different blocks. Supersedes the retired
+│   │   │                             #   analyze-micro.ts (deleted; every layer, including a
+│   │   │                             #   single block's own file list, is a layer now).
 │   │   ├── log.ts                    # tiny leveled logger; no I/O side effects as a library.
 │   │   │                             #   Added with Task 2, once blocks/ has real phases to
 │   │   │                             #   report — cli.ts/analyze.ts have nothing to log before then.
@@ -161,7 +164,39 @@ BlockNet/
 │   │   │   ├── resolve-block.ts      # file path → owning block id (longest-prefix match);
 │   │   │   │                         #   no match → the "(root)" catch-all block, never a
 │   │   │   │                         #   silently dropped edge
-│   │   │   └── block-aggregate.ts    # FileEdge[] → Edge[] at block granularity
+│   │   │   ├── block-aggregate.ts    # FileEdge[] → Edge[] at block granularity
+│   │   │   ├── layer-items.ts        # v2.0.1 (ROADMAP-V2.md): direct-children item boundaries
+│   │   │   │                         #   for one layer, any layerPath incl. root — mixes
+│   │   │   │                         #   folder-aggregate and file-leaf boundaries per
+│   │   │   │                         #   groupDirectChildren(); every layer, not just root, also
+│   │   │   │                         #   lists its own nested blocks via nestedBlockItemsFor's/
+│   │   │   │                         #   hasIntermediateBlock's compact-folder rule (a block
+│   │   │   │                         #   nested inside another block's own directory, e.g.
+│   │   │   │                         #   extension/webview inside extension, never appears at
+│   │   │   │                         #   its enclosing block's layer directly — it surfaces one
+│   │   │   │                         #   layer deeper, mirroring VS Code's own "compact folders"
+│   │   │   │                         #   convention — fixed to apply at every depth, not just
+│   │   │   │                         #   root, after live verification against this repo's own
+│   │   │   │                         #   data found the original implementation never injected
+│   │   │   │                         #   a nested block as an item at any non-root layer at all).
+│   │   │   │                         #   Pure over one shared walkRealFiles(rootDir) call, not
+│   │   │   │                         #   its own scoped walk (symlink-dedup correctness, same
+│   │   │   │                         #   reasoning the retired analyze-micro.ts's
+│   │   │   │                         #   filesForBlock() established)
+│   │   │   └── layer-connections.ts  # v2.0.1 (ROADMAP-V2.md): resolveLayerConnections() —
+│   │   │                             #   the unifying insight. Resolves every FileEdge against
+│   │   │                             #   a layer's own item boundaries: both endpoints inside →
+│   │   │                             #   an intra-layer LayerEdge; exactly one endpoint inside →
+│   │   │                             #   an inter-layer LayerArrow, direction derived from
+│   │   │                             #   comparing the off-screen target's path-segment depth
+│   │   │                             #   against the layer's own item depth (a depth-relative
+│   │   │                             #   hint, not a literal reachability claim). Same-target
+│   │   │                             #   arrows from the SAME source item collapse into one
+│   │   │                             #   ("elevator-call semantics"); different source items
+│   │   │                             #   pointing at the same off-screen file each keep their
+│   │   │                             #   own arrow. Internal Map keys use NUL (`\0`), reusing
+│   │   │                             #   block-aggregate.ts's own established convention
+│   │   │                             #   (paths can legally contain `->`)
 │   │   │
 │   │   ├── risks/                    # LAYER 1 — risk checks. Added with Task 4, 2026-07-19.
 │   │   │   ├── index.ts              # runs all checks, merges into Risk[], attaches to
@@ -259,18 +294,25 @@ BlockNet/
 │       │       └── ...               #   imports auth/index.ts, added with Task 3.
 │       ├── ipc-worker.test.ts        # black-box, real forked worker + real IPC channel —
 │       │                             #   same posture cli.test.ts takes toward cli.ts.
-│       │                             #   Covers both `mode: 'macro'` (unchanged) and
-│       │                             #   `mode: 'micro'` (v2.0)
-│       ├── analyze-micro.test.ts     # checked-in monorepo fixture (cross-block BOUNDARY risk
-│       │                             #   marks the real source file risky) + a dedicated
-│       │                             #   intra-block-cycle temp-dir fixture (the "deliberate
-│       │                             #   v1 scope boundary" risks/index.ts's header comment
-│       │                             #   describes — this is what closes it) + the "(root)"
-│       │                             #   catch-all block + nested-block, cross-block-symlink,
-│       │                             #   and large-file (2MB LOC-scan cap) regression cases
-│       │                             #   added after real-repo verification against aetherinc/
-│       │                             #   AetherArenaV2/BlockNet-self found and fixed 3 real
-│       │                             #   bugs (docs/planning/PROGRESS-V2.md). Added with v2.0
+│       │                             #   Covers both the macro request kind (unchanged) and
+│       │                             #   the 'layer' request kind (v2.0.1)
+│       ├── edges.layer-items.test.ts # itemsForLayer() at layer 0 (block + loose-file/folder
+│       │                             #   mix) and deeper layers, incl. the compact-folder rule
+│       │                             #   for a block nested inside another block's directory
+│       ├── edges.layer-connections.test.ts  # resolveLayerConnections(): intra-layer edges,
+│       │                             #   inter-layer arrow direction (up/down from depth
+│       │                             #   comparison), same-target arrow collapsing, risk
+│       │                             #   propagation from riskyPairs
+│       ├── analyze-layer.test.ts     # end-to-end analyzeLayer() on a temp-repo fixture
+│       │                             #   (createTempRepo()/writeText() helpers): layer 0 and
+│       │                             #   deeper layers, doc-stack grouping (>1 loose doc file
+│       │                             #   collapses, exactly 1 stays a plain file item), global
+│       │                             #   (not block-scoped) risk flagging, the "(root)"
+│       │                             #   catch-all block, and the same nested-block,
+│       │                             #   cross-block-symlink, and large-file (2MB LOC-scan cap)
+│       │                             #   regression cases the retired analyze-micro.test.ts
+│       │                             #   originally established after real-repo verification
+│       │                             #   against aetherinc/AetherArenaV2/BlockNet-self
 │       ├── path-utils.test.ts
 │       ├── realpath-dedup.test.ts
 │       ├── file-walk.test.ts
@@ -285,6 +327,7 @@ BlockNet/
 │       ├── edges.resolve-block.test.ts
 │       ├── edges.block-aggregate.test.ts
 │       ├── analyze.edges.test.ts
+│       ├── analyze.progress.test.ts  # onProgress phase/done/total sequencing end to end
 │       ├── risks.cycles.test.ts
 │       ├── risks.boundary.test.ts
 │       ├── risks.index.test.ts       # merge logic: Edge.risk priority when a directed block
@@ -339,11 +382,12 @@ BlockNet/
 │   │   │                             #   from a superseded generation — see FLOWS.md §2a.
 │   │   │                             #   Takes workerPath as a constructor param (Task 6) —
 │   │   │                             #   see decisions/0011's 2026-07-20 amendment for why.
-│   │   │                             #   v2.0: runMicro()/isLatestMicro() add a SECOND,
-│   │   │                             #   independent generation counter/namespace for micro
-│   │   │                             #   (file-level) requests — a save-triggered macro
-│   │   │                             #   re-analysis must never supersede an in-flight,
-│   │   │                             #   user-driven micro dive, and vice versa (PROTOCOL.md)
+│   │   │                             #   v2.0.1: runLayer()/isLatestLayer() add a SECOND,
+│   │   │                             #   independent generation counter/namespace
+│   │   │                             #   (#latestLayerGeneration) for layer-navigation
+│   │   │                             #   requests — a save-triggered macro re-analysis must
+│   │   │                             #   never supersede an in-flight, user-driven layer
+│   │   │                             #   navigation, and vice versa (PROTOCOL.md)
 │   │   ├── cache-bridge.ts           # resolves context.storageUri → cache dir for ipc-worker
 │   │   ├── change-buffer.ts          # pure debounce-buffer bookkeeping: classifies events
 │   │   │                             #   (content / add-delete-rename / config) per
@@ -371,26 +415,28 @@ BlockNet/
 │   │   │                             #   still unimplemented, not deferred to a task. Also owns
 │   │   │                             #   the ready handshake (whenReady()) and the layout/
 │   │   │                             #   persist → onLayoutPersist callback wiring — see
-│   │   │                             #   PROTOCOL.md. v2.0: also dispatches graph/micro/request
-│   │   │                             #   → onMicroRequest, the third callback createOrReveal()
-│   │   │                             #   takes alongside onLayoutPersist/onOpenFile
-│   │   ├── state.ts                  # workspaceState: FOUR independent sparse maps — macro
-│   │   │                             #   node positions (Task 8, `blocknet.positions`), macro
-│   │   │                             #   edge waypoints (ROADMAP-V2.md's draggable/bendable
-│   │   │                             #   edge routing, `blocknet.edgeWaypoints`), and their v2.0
-│   │   │                             #   micro-view counterparts scoped per dived-into block
-│   │   │                             #   (`blocknet.filePositions`, `blocknet.fileEdgeWaypoints`
-│   │   │                             #   — GraphView.tsx's own second `useCameraStore` instance,
-│   │   │                             #   posted via the `layout/file-persist` message). Each its
-│   │   │                             #   own workspaceState key, mirrored get/set function pairs.
+│   │   │                             #   PROTOCOL.md. v2.0.1: also dispatches
+│   │   │                             #   graph/layer/request → onLayerRequest, the third
+│   │   │                             #   callback createOrReveal() takes alongside
+│   │   │                             #   onLayoutPersist/onOpenFile (unified layer model —
+│   │   │                             #   every layer navigation, not just a block dive, goes
+│   │   │                             #   through this one callback)
+│   │   ├── state.ts                  # workspaceState: TWO independent sparse maps, each
+│   │   │                             #   spanning every item/edge at every layer (v2.0.1's
+│   │   │                             #   unified layer model retired the old four-key
+│   │   │                             #   macro/micro split) — node positions (`blocknet.
+│   │   │                             #   positions`) and edge waypoints (ROADMAP-V2.md's
+│   │   │                             #   draggable/bendable edge routing, `blocknet.
+│   │   │                             #   edgeWaypoints`). Safe as one flat map each because
+│   │   │                             #   every id is already globally unique by repo-relative
+│   │   │                             #   path — can't collide across layers. Each its own
+│   │   │                             #   workspaceState key, mirrored get/set function pairs.
 │   │   │                             #   Takes a narrow WorkspaceMemento structural type, not
 │   │   │                             #   vscode.Memento — Layer 3, not 4 (see LAYERS.md). No
 │   │   │                             #   manifest pointer — the last-known-good GraphResult
 │   │   │                             #   snapshot already lives in core/cache/store.ts under
 │   │   │                             #   context.storageUri (STATE-OWNERSHIP.md), a disk cache
-│   │   │                             #   with nothing to do with workspaceState; this file's
-│   │   │                             #   earlier description conflated the two before either was
-│   │   │                             #   built
+│   │   │                             #   with nothing to do with workspaceState
 │   │   ├── dirty-blocks.ts           # (Task 9) pure `dirtyBlockIds(blocks, dirtyFiles)` path-
 │   │   │                             #   prefix aggregation, zero vscode import — Layer 3, unit-
 │   │   │                             #   tested (extension/test/dirty-blocks.test.ts). Split out
@@ -409,27 +455,48 @@ BlockNet/
 │   │   │   │                         #   (from state.ts) then triggering analysis — PROTOCOL.md.
 │   │   │   │                         #   Also queries git.ts + dirty-blocks.ts on every
 │   │   │   │                         #   graph/macro push to augment nodes with `dirty` (Task 9).
-│   │   │   │                         #   v2.0: triggerMicroAnalysis() — same dual-generation-
-│   │   │   │                         #   gate pattern as triggerAnalysis, posts graph/micro or
-│   │   │   │                         #   graph/micro/error (FLOWS.md §5)
+│   │   │   │                         #   v2.0.1: triggerLayerAnalysis() — same dual-generation-
+│   │   │   │                         #   gate pattern as triggerAnalysis (against runLayer()'s
+│   │   │   │                         #   own independent counter), posts graph/layer or
+│   │   │   │                         #   graph/layer/error for EVERY layer navigation, not just
+│   │   │   │                         #   a block dive (FLOWS.md's "Layer navigation" flow).
+│   │   │   │                         #   Dirty markers reuse dirty-blocks.ts's dirtyBlockIds()
+│   │   │   │                         #   unchanged for folder items, exact-path membership for
+│   │   │   │                         #   file items, and any-constituent-file membership for a
+│   │   │   │                         #   doc stack (which has no single path of its own)
 │   │   │   └── open-file.ts          # (Task 9) `open/file` → showTextDocument(uri,
 │   │   │                             #   {viewColumn: Beside, selection}) — see decisions/0009.
-│   │   │                             #   Unchanged by v2.0: FileCard's ⤢ (webview/src/flow/
-│   │   │                             #   FileCard.tsx) is a second sender into the identical
-│   │   │                             #   flow, needing no changes here (FLOWS.md §3). `open/
-│   │   │                             #   diff` (vscode.diff) still stays unimplemented — no UI
-│   │   │                             #   sends it, block or file level
+│   │   │                             #   Unchanged since: FileCard's ⤢ (mounted inside
+│   │   │                             #   LayerCanvas.tsx's file-kind nodes) and
+│   │   │                             #   DocStackPopover's file rows are further senders into
+│   │   │                             #   the identical flow, needing no changes here (FLOWS.md
+│   │   │                             #   §3). `open/diff` (vscode.diff) still stays
+│   │   │                             #   unimplemented — no UI sends it
 │   │   │
 │   │   └── shared/
 │   │       └── protocol.ts           # see PROTOCOL.md. Both extension/src/** (panel.ts's
 │   │                                 #   post()/onDidReceiveMessage, since Task 6) and
 │   │                                 #   extension/webview/src/** (host-bridge.ts, since
 │   │                                 #   Task 8) import it — a relative cross-boundary import,
-│   │                                 #   no workspace-package indirection. v2.0: gains
-│   │                                 #   WebviewMicroFileNode (MicroFileNode & {dirty}, the
-│   │                                 #   same augmentation pattern as WebviewBlockNode) and the
-│   │                                 #   graph/micro, graph/micro/error, graph/micro/request
-│   │                                 #   message types
+│   │                                 #   no workspace-package indirection. v2.0.1: gains
+│   │                                 #   WebviewLayerItem (LayerItem & {dirty}, the same
+│   │                                 #   augmentation pattern as WebviewBlockNode) and the
+│   │                                 #   graph/layer, graph/layer/error, graph/layer/request
+│   │                                 #   message types; layout/restore and layout/persist
+│   │                                 #   simplify to ONE flat positions/edgeWaypoints map each
+│   │                                 #   (the retired filePositions/fileEdgeWaypoints fields and
+│   │                                 #   the layout/file-persist message are gone); graph/micro,
+│   │                                 #   graph/micro/error, and graph/micro/request are removed
+│   │
+│   ├── test/                         # unit tests for every Layer-3 (vscode-free) file above —
+│   │   ├── analysis-runner.test.ts   # real forked worker + real IPC, both request kinds
+│   │   ├── cache-bridge.test.ts
+│   │   ├── change-buffer.test.ts
+│   │   ├── dirty-blocks.test.ts
+│   │   ├── state.test.ts             # getPositions/setPositions/getEdgeWaypoints/
+│   │   │                             #   setEdgeWaypoints round-trip against the two
+│   │   │                             #   unified v2.0.1 workspaceState keys
+│   │   └── webview-html.test.ts
 │   │
 │   └── webview/                      # LAYER 5 — @blocknet/webview, its own npm workspace and
 │       │                             #   npm package (not part of @blocknet/extension's own
@@ -454,43 +521,49 @@ BlockNet/
 │       ├── src/
 │       │   ├── main.tsx              # createRoot(...).render(<App />)
 │       │   ├── App.tsx               # `?sample=1`/`?stress=1` bypass straight to GraphView
-│       │   │                         #   (v2.0: via FixtureApp, which resolves a block
-│       │   │                         #   double-click against a static per-block dataset
-│       │   │                         #   through a setTimeout, never a real host round-trip —
+│       │   │                         #   (via FixtureApp, which resolves a layer navigation
+│       │   │                         #   against a static per-layerPath dataset through a
+│       │   │                         #   setTimeout, never a real host round-trip —
 │       │   │                         #   host-bridge.ts's postToHost is a no-op outside a real
-│       │   │                         #   webview, so nothing would ever answer a real
-│       │   │                         #   graph/micro/request here) with a static macro
-│       │   │                         #   fixture (dev/QA only — a real VS Code host never sets
-│       │   │                         #   either param, and this is the only way to visually
-│       │   │                         #   test outside one, since acquireVsCodeApi() doesn't
-│       │   │                         #   exist in a plain browser). Otherwise LiveApp: posts
-│       │   │                         #   webview/ready, subscribes via host-bridge.ts, shows an
-│       │   │                         #   inline "Analyzing…" (+ analysis/progress phase/done/
-│       │   │                         #   total once received) until graph/macro arrives, then
-│       │   │                         #   renders GraphView with layout/restore's positions
-│       │   │                         #   (v2.0: also forwards graph/micro/graph/micro/error
-│       │   │                         #   into GraphView's micro/microError props). No dedicated
-│       │   │                         #   ProgressBar/EmptyState component — the loading text is
-│       │   │                         #   inline in LiveApp, and the no-workspace/multi-root
-│       │   │                         #   states are still panel.ts's own plain HTML (see its
-│       │   │                         #   entry above) — App.tsx is never even loaded for those
+│       │   │                         #   webview) with a static layer-0 fixture (dev/QA only —
+│       │   │                         #   a real VS Code host never sets either param, and this
+│       │   │                         #   is the only way to visually test outside one, since
+│       │   │                         #   acquireVsCodeApi() doesn't exist in a plain browser).
+│       │   │                         #   Otherwise LiveApp: posts webview/ready, subscribes via
+│       │   │                         #   host-bridge.ts, shows an inline "Analyzing…" (+
+│       │   │                         #   analysis/progress phase/done/total once received)
+│       │   │                         #   until the first graph/layer arrives. v2.0.1 unified
+│       │   │                         #   layer model: graph/macro's own payload is never
+│       │   │                         #   rendered — its arrival (cold open, or a background
+│       │   │                         #   re-analysis) is the signal to (re)issue
+│       │   │                         #   graph/layer/request for whatever layerPath is CURRENT
+│       │   │                         #   (currentLayerPathRef, updated on every layer
+│       │   │                         #   navigation GraphView issues) — re-requesting root
+│       │   │                         #   unconditionally would leave a deep layer showing stale
+│       │   │                         #   pre-edit data after a save until the user manually
+│       │   │                         #   backed all the way out and back in (a real gap found
+│       │   │                         #   and fixed while reconciling this file against
+│       │   │                         #   FLOWS.md). No dedicated ProgressBar/EmptyState
+│       │   │                         #   component — the loading text is inline in LiveApp, and
+│       │   │                         #   the no-workspace/multi-root states are still panel.ts's
+│       │   │                         #   own plain HTML (see its entry above) — App.tsx is
+│       │   │                         #   never even loaded for those
 │       │   ├── host-bridge.ts        # acquireVsCodeApi() wrapper (memoized — VS Code throws if
 │       │   │                         #   called twice), postToHost()/onHostMessage(). Imports
 │       │   │                         #   WebviewMessage/HostMessage from
 │       │   │                         #   ../../src/shared/protocol.ts directly (PROTOCOL.md)
-│       │   ├── camera-store.ts       # useCameraStore() hook (FLOWS.md §4): seeds from
-│       │   │                         #   layout/restore, updates optimistically on drag/arrow-
-│       │   │                         #   move, debounces ~300ms before posting the full sparse
-│       │   │                         #   positions map back as layout/persist. Also owns
-│       │   │                         #   edgeWaypoints (ROADMAP-V2.md draggable/bendable edge
-│       │   │                         #   routing) — ONE shared debounce/message for both maps,
-│       │   │                         #   not two independent stores. Optional 3rd `persist`
-│       │   │                         #   callback param (file-level drag parity): GraphView.tsx
-│       │   │                         #   calls this hook a SECOND, independent time for file
-│       │   │                         #   positions/waypoints, posting layout/file-persist instead
-│       │   │                         #   of the default layout/persist — read via a ref, NOT a
-│       │   │                         #   debounce-effect dependency, since GraphView passes a
-│       │   │                         #   fresh inline-arrow identity every render (PROTOCOL.md)
+│       │   ├── camera-store.ts       # useCameraStore() hook (FLOWS.md's layer-navigation
+│       │   │                         #   flow): seeds from layout/restore, updates
+│       │   │                         #   optimistically on drag/arrow-move, debounces ~300ms
+│       │   │                         #   before posting the full sparse positions map back as
+│       │   │                         #   layout/persist. Also owns edgeWaypoints (ROADMAP-V2.md
+│       │   │                         #   draggable/bendable edge routing) — ONE shared
+│       │   │                         #   debounce/message for both maps. v2.0.1: ONE instance,
+│       │   │                         #   owned by GraphView.tsx for the panel's whole session,
+│       │   │                         #   spans every layer ever visited — the retired
+│       │   │                         #   macro-only/file-level-second-instance split is gone,
+│       │   │                         #   since every id is already globally unique by
+│       │   │                         #   repo-relative path
 │       │   ├── index.css             # self-hosted @font-face (Space Grotesk + JetBrains
 │       │   │                         #   Mono, variable-font woff2s in src/assets/fonts/),
 │       │   │                         #   reset, scrollbar styling, .bn-loading
@@ -503,28 +576,33 @@ BlockNet/
 │       │   │                         #   VS Code itself) rather than forcing one fixed look
 │       │   │
 │       │   ├── flow/
-│       │   │   ├── BlockCanvas.tsx   # React Flow root: fitView (not a fixed default
-│       │   │   │                     #   viewport — dagre's raw coordinates aren't centered
-│       │   │   │                     #   around origin), pan/zoom clamp k∈[0.3,2.4],
-│       │   │   │                     #   selection-driven dimming, status bar + zoom controls.
-│       │   │   │                     #   onNodesChange commits position-only changes into
-│       │   │   │                     #   camera-store.ts's positions map, layered over
-│       │   │   │                     #   layout.ts's dagre output — RF runs in controlled mode
-│       │   │   │                     #   (no defaultNodes), so drag/arrow-key moves are
-│       │   │   │                     #   silently discarded without it (two-pass review found
-│       │   │   │                     #   this as a real bug). Also renders RiskPopover when the
-│       │   │   │                     #   current edge selection carries a risk (Task 8). v2.0:
-│       │   │   │                     #   onNodeDoubleClick → onBlockDoubleClick prop, gated on
-│       │   │   │                     #   zoomOnDoubleClick={false} — a real, live-verified bug:
-│       │   │   │                     #   React Flow's own zoomOnDoubleClick=true default has
-│       │   │   │                     #   d3-zoom call stopImmediatePropagation() on the native
-│       │   │   │                     #   dblclick event before it reaches React's synthetic
-│       │   │   │                     #   onNodeDoubleClick, so a block double-click silently
-│       │   │   │                     #   just zoomed instead of diving in until this was set —
-│       │   │   │                     #   jsdom unit tests never caught it (fireEvent.doubleClick
-│       │   │   │                     #   doesn't exercise d3-zoom's real listener), only real-
-│       │   │   │                     #   browser Playwright verification did
-│       │   │   ├── BlockCanvas.css   # full-bleed canvas sizing; hides RF's default
+│       │   │   ├── LayerCanvas.tsx   # v2.0.1 unified layer model (ROADMAP-V2.md): ONE React
+│       │   │   │                     #   Flow canvas for any layer, repo root down through
+│       │   │   │                     #   arbitrary depth — supersedes the retired BlockCanvas.tsx
+│       │   │   │                     #   (macro-only) and FileCanvas.tsx (file-leaves-only)
+│       │   │   │                     #   entirely, since every layer now mixes folder-aggregate
+│       │   │   │                     #   and file-leaf items. fitView (not a fixed default
+│       │   │   │                     #   viewport), pan/zoom clamp k∈[0.3,2.4], selection-driven
+│       │   │   │                     #   dimming, status bar + zoom controls. onNodesChange
+│       │   │   │                     #   commits position-only changes via applyNodeChanges (RF
+│       │   │   │                     #   runs in controlled mode — a hand-rolled reset causes RF
+│       │   │   │                     #   error #015, the same lesson the retired canvases'
+│       │   │   │                     #   history already established). onNodeDoubleClick dives
+│       │   │   │                     #   only a folder-kind node, gated on
+│       │   │   │                     #   zoomOnDoubleClick={false} (d3-zoom's own
+│       │   │   │                     #   stopImmediatePropagation gotcha, same fix the retired
+│       │   │   │                     #   BlockCanvas.tsx already proved live). Renders
+│       │   │   │                     #   DocStackPopover when a doc-stack card is selected. No
+│       │   │   │                     #   RiskPopover — LayerEdge/LayerArrow carry only a boolean
+│       │   │   │                     #   `risk`, not a full Risk object (DATA-MODEL.md); no
+│       │   │   │                     #   breadcrumb — GraphView.tsx's FloorPicker owns all
+│       │   │   │                     #   navigation display now. Module-level stable
+│       │   │   │                     #   NO_ARROWS/noopArrowNavigate defaults (not default
+│       │   │   │                     #   parameter values) — a real, test-caught "Maximum update
+│       │   │   │                     #   depth exceeded" loop otherwise, since a default param
+│       │   │   │                     #   expression gets a fresh identity every render a caller
+│       │   │   │                     #   omits the prop
+│       │   │   ├── LayerCanvas.css   # full-bleed canvas sizing; hides RF's default
 │       │   │   │                     #   selection-rect/connection-line chrome (dead code
 │       │   │   │                     #   paths — nodesConnectable={false}, selectionOnDrag={false})
 │       │   │   ├── BlockCard.tsx     # pure presentational card (dot/risk pill/tech
@@ -532,10 +610,69 @@ BlockNet/
 │       │   │   │                     #   dependency, so it's unit-testable in isolation;
 │       │   │   │                     #   `interactive` prop suppresses its own role/tabIndex/
 │       │   │   │                     #   keyboard handling when RF's own node wrapper (which
-│       │   │   │                     #   already owns those) is the one mounting it
+│       │   │   │                     #   already owns those) is the one mounting it. Reused
+│       │   │   │                     #   verbatim by FolderNode.tsx for EVERY folder-kind item
+│       │   │   │                     #   at any layer, not just an AD-5-detected block — an
+│       │   │   │                     #   empty `pills` array already renders as "no visual
+│       │   │   │                     #   distinction," which IS the v2.0.1 design (a plain
+│       │   │   │                     #   folder and a real block look identical)
 │       │   │   ├── BlockCard.css     # design tokens as CSS custom properties (theme/tokens.css)
-│       │   │   ├── BlockNode.tsx     # thin RF NodeProps adapter: invisible Handle anchors
-│       │   │   │                     #   (RiskEdge draws the visible port dot) + BlockCard
+│       │   │   ├── FolderNode.tsx    # thin RF NodeProps adapter for every folder-kind layer
+│       │   │   │                     #   item (v2.0.1) — invisible Handle anchors (RiskEdge
+│       │   │   │                     #   draws the visible port dot) + BlockCard + this item's
+│       │   │   │                     #   own InterLayerArrows row. Supersedes the retired
+│       │   │   │                     #   BlockNode.tsx (macro-only)
+│       │   │   ├── FileNode.tsx      # thin RF NodeProps adapter for every file-kind layer item,
+│       │   │   │                     #   mirroring FolderNode.tsx's shape exactly: invisible
+│       │   │   │                     #   Handle anchors + FileCard + InterLayerArrows
+│       │   │   ├── FileCard.tsx      # pure presentational card, mirrors BlockCard.tsx's shape at
+│       │   │   │                     #   file granularity (no pills, no connection-count badge).
+│       │   │   │                     #   The ⤢ button posts open/file via onOpenInEditor
+│       │   │   │                     #   (LayerCanvas.tsx wires it to postToHost) — the same
+│       │   │   │                     #   native-delegation flow RiskPopover's evidence links
+│       │   │   │                     #   already use, never a webview-embedded editor
+│       │   │   │                     #   (decisions/0009). Name + ⤢ sit on their own row, LOC/
+│       │   │   │                     #   dirty/risk badges on a separate wrapping row below —
+│       │   │   │                     #   NOT one crammed row: a real, live-verified bug (not
+│       │   │   │                     #   theoretical) found the name shrink to 0px width (a
+│       │   │   │                     #   flexbox min-width:auto pitfall under overflow:hidden)
+│       │   │   │                     #   when sharing a row with the risk pill, then overlap
+│       │   │   │                     #   once that was fixed but the row still wasn't wide
+│       │   │   │                     #   enough — splitting the row, not a magic card width, is
+│       │   │   │                     #   the actual fix (stays correct for real file names)
+│       │   │   ├── FileCard.css      # min-width defensively also added to BlockCard.css's
+│       │   │   │                     #   identical name-in-a-flex-row pattern — same latent
+│       │   │   │                     #   failure mode, not yet reproduced there but the same fix
+│       │   │   ├── DocStackCard.tsx  # a layer's own loose documentation files, collapsed into
+│       │   │   │                     #   one card (ROADMAP-V2.md's v2.0.1 doc-stack card) —
+│       │   │   │                     #   real-repo-motivated (this repo's own docs/ tree).
+│       │   │   │                     #   Visual scales with volume: 2-3 files is a compact
+│       │   │   │                     #   stacked-paper look (reusing the floor-picker's own
+│       │   │   │                     #   stacked-slab visual language); more than 3 renders
+│       │   │   │                     #   sized/styled like a full folder-block card. Clicking it
+│       │   │   │                     #   opens DocStackPopover, never a layer dive
+│       │   │   ├── DocStackCard.css  # data-large breakpoint (>3 files) shares its exact
+│       │   │   │                     #   threshold constant with layer-layout.ts, so layout and
+│       │   │   │                     #   rendering can never silently drift on where it sits
+│       │   │   ├── DocStackNode.tsx  # thin RF NodeProps adapter, mirrors FileNode.tsx's Handle
+│       │   │   │                     #   placement — no InterLayerArrows row: a doc-stack never
+│       │   │   │                     #   participates in intra-layer edges or arrows (doc files
+│       │   │   │                     #   never appear in FileEdge[] regardless)
+│       │   │   ├── InterLayerArrows.tsx  # v2.0.1 (ROADMAP-V2.md): a small clickable arrow row
+│       │   │   │                     #   anchored to its source card's bottom edge, one per
+│       │   │   │                     #   distinct off-screen target file (same-target
+│       │   │   │                     #   aggregation already done by core's
+│       │   │   │                     #   resolveLayerConnections() before this renders).
+│       │   │   │                     #   Direction (↓ deeper / ↑ shallower-or-cousin) is a
+│       │   │   │                     #   depth-relative hint, not a literal reachability claim —
+│       │   │   │                     #   clicking always resolves the real path. Deliberately
+│       │   │   │                     #   NOT a routable RF edge (no real on-screen target node
+│       │   │   │                     #   to draw a line to). Stops both click AND dblclick
+│       │   │   │                     #   propagation — a native dblclick is a separate DOM event
+│       │   │   │                     #   from two clicks, so stopping click alone still let a
+│       │   │   │                     #   double-click on an arrow badge also drill into the
+│       │   │   │                     #   folder underneath it (caught proactively while testing)
+│       │   │   ├── InterLayerArrows.css
 │       │   │   ├── RiskEdge.tsx      # bezier port→port (edge-path.ts's exact port of the
 │       │   │   │                     #   design reference's pathOf(), not RF's generic
 │       │   │   │                     #   getBezierPath, for visual parity); dashed animated /
@@ -557,102 +694,84 @@ BlockNet/
 │       │   │   ├── edge-path.ts      # pure bezier path math, unit-tested independent of RF —
 │       │   │   │                     #   optional waypoint param stitches two cubic segments
 │       │   │   │                     #   through it instead of one (draggable edge routing)
-│       │   │   ├── layout.ts         # dagre LR auto-layout — computes every node's position
-│       │   │   │                     #   unconditionally (dagre has no "pinned node" concept
-│       │   │   │                     #   to scope around); persisted/dragged positions are
-│       │   │   │                     #   layered on top at BlockCanvas.tsx via camera-store.ts
-│       │   │   │                     #   instead, same pattern proven for live drag overrides.
-│       │   │   │                     #   Re-exports Position from shared/protocol.ts (Task 8)
-│       │   │   │                     #   rather than declaring its own duplicate
+│       │   │   ├── layer-layout.ts   # v2.0.1 (ROADMAP-V2.md): dagre LR auto-layout for a mixed
+│       │   │   │                     #   layer (folder/file/doc-stack items in ONE pass) —
+│       │   │   │                     #   supersedes the retired layout.ts (blocks-only) and
+│       │   │   │                     #   file-layout.ts (files-only), since a single fixed
+│       │   │   │                     #   node size no longer holds once folder and file cards
+│       │   │   │                     #   (and a doc-stack that scales between the two) can
+│       │   │   │                     #   appear in the same graph. Always the FRESH layout
+│       │   │   │                     #   only — LayerCanvas.tsx layers a persisted/dragged
+│       │   │   │                     #   override on top via camera-store.ts
 │       │   │   ├── graph-derive.ts   # pure: relatedIds() (selection→dimming, mirrors the
 │       │   │   │                     #   design reference's relatedSet(); typed generically over
-│       │   │   │                     #   `{id,source,target}` since v2.0 — FileCanvas.tsx calls
-│       │   │   │                     #   the identical function with MicroFileEdge[]) +
-│       │   │   │                     #   connectionCounts() (the connection-count badge, new
-│       │   │   │                     #   beyond the reference, macro-only — MicroFileNode has no
-│       │   │   │                     #   connection-count badge in the design)
+│       │   │   │                     #   `{id,source,target}`) + connectionCounts() (the
+│       │   │   │                     #   connection-count badge, generic over NodeLike[]/
+│       │   │   │                     #   EdgeLike[] since v2.0.1 — LayerCanvas.tsx calls it for
+│       │   │   │                     #   folder-kind items) + siblingOffsets() (parallel/
+│       │   │   │                     #   anti-parallel edge separation, PROTOCOL.md)
 │       │   │   ├── block-label.ts    # shared accessible-name text: BlockCard's own aria-label
-│       │   │   │                     #   when standalone, and BlockCanvas.tsx's node.ariaLabel
+│       │   │   │                     #   when standalone, and LayerCanvas.tsx's node.ariaLabel
 │       │   │   │                     #   when RF's own node wrapper (which already provides
 │       │   │   │                     #   tabIndex/role/keyboard handling) owns the a11y instead
-│       │   │   ├── GraphView.tsx     # v2.0 (ROADMAP-V2.md): owns the macro↔micro cross-fade —
-│       │   │   │                     #   both BlockCanvas and FileCanvas are real, independent,
-│       │   │   │                     #   permanently-mounted ReactFlow instances, cross-faded via
-│       │   │   │                     #   CSS opacity+transform (mirrors the design-handoff
-│       │   │   │                     #   prototype's own two-layer mechanism), never one canvas
-│       │   │   │                     #   re-themed. Deliberately does NOT optimistically cross-
-│       │   │   │                     #   fade the instant a double-click fires (unlike the
-│       │   │   │                     #   prototype, which had no real async fetch) — macro stays
-│       │   │   │                     #   interactive with a loading indicator until graph/micro
-│       │   │   │                     #   (or graph/micro/error) actually arrives. Client-side
-│       │   │   │                     #   third gating layer on top of the host's dual generation
-│       │   │   │                     #   check (PROTOCOL.md): compares an incoming response's
-│       │   │   │                     #   blockId against local pendingBlockId, discarding a late
-│       │   │   │                     #   one for a block the user has since navigated away from.
-│       │   │   │                     #   Also owns a SECOND useCameraStore instance (file-level
-│       │   │   │                     #   drag parity, PROTOCOL.md) — the only component that
-│       │   │   │                     #   survives FileCanvas's own per-dive remount for the
-│       │   │   │                     #   panel's whole session, so it's the one that can preserve
-│       │   │   │                     #   a dragged file position/waypoint across a same-session
-│       │   │   │                     #   re-dive into a previously-visited block
-│       │   │   ├── GraphView.css     # the cross-fade itself: opacity+transform transition,
-│       │   │   │                     #   ~0.45–0.5s per the design-handoff prototype
-│       │   │   ├── FileCanvas.tsx    # v2.0: file-level canvas for one block's dive-in — mirrors
-│       │   │   │                     #   BlockCanvas.tsx's structure at file granularity (own
-│       │   │   │                     #   pan/zoom/selection/dimming). No risk popover:
-│       │   │   │                     #   MicroFileEdge only carries a boolean `risk`, not a full
-│       │   │   │                     #   Risk with oneLine/explain/fix/evidence — the macro graph
-│       │   │   │                     #   is where a crossing risk's full explanation already
-│       │   │   │                     #   lives; this answers "which files/imports," not "why," a
-│       │   │   │                     #   deliberately narrower first cut (DATA-MODEL.md). File
-│       │   │   │                     #   cards and micro-edge waypoints now drag/persist like
-│       │   │   │                     #   BlockCanvas's own (file-level drag parity, PROTOCOL.md);
-│       │   │   │                     #   its initialPositions seed is captured once via useState's
-│       │   │   │                     #   lazy initializer, deliberately NOT a live-reactive prop —
-│       │   │   │                     #   see PROTOCOL.md for the real React Flow #015/flicker bug
-│       │   │   │                     #   this fixes
-│       │   │   ├── FileCanvas.css    # the "← zoom out to map" button (ROADMAP-V2.md's v2.0 spec
-│       │   │   │                     #   names it explicitly, alongside the breadcrumb
-│       │   │   │                     #   StatusBar.tsx already renders)
-│       │   │   ├── FileNode.tsx      # thin RF NodeProps adapter, mirrors BlockNode.tsx exactly:
-│       │   │   │                     #   invisible Handle anchors + FileCard
-│       │   │   ├── FileCard.tsx      # pure presentational card, mirrors BlockCard.tsx's shape at
-│       │   │   │                     #   file granularity (no pills, no connection-count badge).
-│       │   │   │                     #   The ⤢ button posts open/file via onOpenInEditor
-│       │   │   │                     #   (FileCanvas.tsx wires it to postToHost) — the same
-│       │   │   │                     #   native-delegation flow RiskPopover's evidence links
-│       │   │   │                     #   already use, never a webview-embedded editor
-│       │   │   │                     #   (decisions/0009). Name + ⤢ sit on their own row, LOC/
-│       │   │   │                     #   dirty/risk badges on a separate wrapping row below —
-│       │   │   │                     #   NOT one crammed row: a real, live-verified bug (not
-│       │   │   │                     #   theoretical) found the name shrink to 0px width (a
-│       │   │   │                     #   flexbox min-width:auto pitfall under overflow:hidden)
-│       │   │   │                     #   when sharing a row with the risk pill, then overlap
-│       │   │   │                     #   once that was fixed but the row still wasn't wide
-│       │   │   │                     #   enough — splitting the row, not a magic card width, is
-│       │   │   │                     #   the actual fix (stays correct for real file names)
-│       │   │   ├── FileCard.css      # min-width defensively also added to BlockCard.css's
-│       │   │   │                     #   identical name-in-a-flex-row pattern — same latent
-│       │   │   │                     #   failure mode, not yet reproduced there but the same fix
-│       │   │   └── file-layout.ts    # dagre LR auto-layout for the micro graph, file-card-sized
-│       │   │                         #   (not a shared generic with layout.ts — file cards render
-│       │   │                         #   smaller, and there's exactly one caller on each side).
-│       │   │                         #   Always the FRESH layout only — FileCanvas.tsx layers a
-│       │   │                         #   persisted/dragged override on top (file-level drag
-│       │   │                         #   parity, PROTOCOL.md), same pattern layout.ts's own
-│       │   │                         #   comment describes for blocks
+│       │   │   ├── GraphView.tsx     # v2.0.1 unified layer model (ROADMAP-V2.md): owns the
+│       │   │   │                     #   arbitrary-depth navigation stack and the layer-to-layer
+│       │   │   │                     #   cross-fade — supersedes the retired v2.0 macro↔micro
+│       │   │   │                     #   two-level design entirely, since every layer (dive,
+│       │   │   │                     #   floor-picker jump, or inter-layer arrow) now goes
+│       │   │   │                     #   through the identical graph/layer/request round trip
+│       │   │   │                     #   and the identical LayerCanvas. `navigateTo(path, name,
+│       │   │   │                     #   nextStack)` computes the FULL resulting stack up front
+│       │   │   │                     #   for all three navigation sources — a dive appends one
+│       │   │   │                     #   entry, a floor-picker jump truncates to an ancestor
+│       │   │   │                     #   index, an arrow reconstructs the whole ancestor chain
+│       │   │   │                     #   by splitting the target's own path (it can point at an
+│       │   │   │                     #   unrelated branch). Deliberately does NOT optimistically
+│       │   │   │                     #   cross-fade the instant a navigation fires — the current
+│       │   │   │                     #   layer stays interactive with a loading indicator until
+│       │   │   │                     #   graph/layer (or graph/layer/error) actually arrives.
+│       │   │   │                     #   Client-side third gating layer on top of the host's
+│       │   │   │                     #   dual generation check (PROTOCOL.md): compares an
+│       │   │   │                     #   incoming response's layerPath against local
+│       │   │   │                     #   pendingLayer.path, discarding a late one for a layer the
+│       │   │   │                     #   user has since navigated away from. Owns the ONE
+│       │   │   │                     #   useCameraStore instance for the panel's whole session
+│       │   │   │                     #   (state persists across a "dive deeper, come back" round
+│       │   │   │                     #   trip within the session). The settle step (freeze
+│       │   │   │                     #   shownData, commit the stack, tear down the outgoing
+│       │   │   │                     #   canvas) is scheduled via a plain `unmountTimer` ref, NOT
+│       │   │   │                     #   a nested effect-tracked timer — a real, test-caught bug:
+│       │   │   │                     #   scheduling it inside the same effect that calls
+│       │   │   │                     #   setPhase('transitioning') let React's own
+│       │   │   │                     #   cleanup-then-rerun of that effect (triggered by that
+│       │   │   │                     #   very setPhase call changing its own dependency) cancel
+│       │   │   │                     #   the settle timer before its 500ms elapsed, every time
+│       │   │   └── GraphView.css     # the cross-fade itself: opacity+transform transition,
+│       │   │                         #   ~0.45–0.5s per the design-handoff prototype
 │       │   │
 │       │   ├── ui/
 │       │   │   ├── StatusBar.tsx     # brand, legend, live risk count (still derived from
-│       │   │   │                     #   BlockCanvas's own edges prop, not risks/update — see
-│       │   │   │                     #   PROTOCOL.md). No ProgressBar/EmptyState component —
+│       │   │   │                     #   LayerCanvas's own edges/items props, not risks/update —
+│       │   │   │                     #   see PROTOCOL.md). No ProgressBar/EmptyState component —
 │       │   │   │                     #   App.tsx's loading state is a plain inline div, not
-│       │   │   │                     #   routed through here. v2.0: optional breadcrumb prop
-│       │   │   │                     #   ("System Map / <block>", FileCanvas.tsx only — a block
-│       │   │   │                     #   canvas has no parent block to name); risk count reflects
-│       │   │   │                     #   risky FILES when passed one, risky EDGES otherwise —
-│       │   │   │                     #   different views, deliberately different metrics
+│       │   │   │                     #   routed through here. v2.0.1: the breadcrumb prop is
+│       │   │   │                     #   removed entirely — FloorPicker.tsx is the one
+│       │   │   │                     #   navigation-display surface now, docked at GraphView
+│       │   │   │                     #   level rather than owned by any one canvas instance
 │       │   │   ├── StatusBar.css
+│       │   │   ├── FloorPicker.tsx   # v2.0.1 layer-stack navigator (ROADMAP-V2.md) — the
+│       │   │   │                     #   Google Maps indoor floor-picker pattern: a fixed,
+│       │   │   │                     #   top-left vertical stack of slab buttons, one per depth
+│       │   │   │                     #   level from the repo root to the current layer, current
+│       │   │   │                     #   one highlighted. Flat 2D styling (shadow/layering for
+│       │   │   │                     #   depth cues, deliberately NOT a 3D perspective scene).
+│       │   │   │                     #   Replaces StatusBar's old hardcoded two-level breadcrumb
+│       │   │   │                     #   entirely — the ONE navigation surface for a session,
+│       │   │   │                     #   docked at GraphView level. Root renders first (top of
+│       │   │   │                     #   the stack), deeper layers render below it, matching
+│       │   │   │                     #   this project's own "down = deeper" convention for
+│       │   │   │                     #   inter-layer arrows
+│       │   │   ├── FloorPicker.css
 │       │   │   ├── ZoomControls.tsx  # −/percent/+/reset, mounted via RF's own <Panel>
 │       │   │   ├── ZoomControls.css
 │       │   │   ├── RiskPopover.tsx   # lightweight popover (not the full v2 connection
@@ -661,24 +780,28 @@ BlockNet/
 │       │   │   │                     #   position, not anchored to the edge's own screen
 │       │   │   │                     #   coordinates (would need RF's viewport-transform math
 │       │   │   │                     #   for a purely cosmetic gain). Closes on × click,
-│       │   │   │                     #   Escape, or selecting something else (BlockCanvas.tsx)
-│       │   │   └── RiskPopover.css
+│       │   │   │                     #   Escape, or selecting something else (LayerCanvas.tsx)
+│       │   │   ├── RiskPopover.css
+│       │   │   ├── DocStackPopover.tsx  # v2.0.1 (ROADMAP-V2.md): shown when a DocStackCard is
+│       │   │   │                     #   selected — lists every file by name, each row posting
+│       │   │   │                     #   open/file with the file's own path on click (same
+│       │   │   │                     #   native-delegation flow as FileCard's ⤢). An accessible
+│       │   │   │                     #   dialog labelled with the file count (singular/plural).
+│       │   │   │                     #   Closes on × click, Escape, or re-selecting the same
+│       │   │   │                     #   card (LayerCanvas.tsx's own selection-toggle logic)
+│       │   │   └── DocStackPopover.css
 │       │   │
 │       │   ├── fixtures/
-│       │   │   ├── sample-graph.ts   # 5 blocks exercising every visual state at once: a real
-│       │   │   │                     #   CIRCULAR cycle, a BOUNDARY deep-import, a risk-free
-│       │   │   │                     #   edge. Dev/QA-only since Task 8 — see App.tsx. v2.0:
-│       │   │   │                     #   sampleMicroByBlock — per-block file data covering a
-│       │   │   │                     #   real intra-block cycle (services/gateway), a dirty +
-│       │   │   │                     #   cross-block-risk file (apps/web), and a risk-free block
-│       │   │   │                     #   with no intra-block edges (packages/ui) in one dataset
-│       │   │   └── stress-graph.ts   # generated 30-block/100-edge fixture — Task 7's stated
-│       │   │                         #   pan/zoom/drag/select scale target. Dev/QA-only since
-│       │   │                         #   Task 8 — see App.tsx. v2.0: stressMicroByBlock covers
-│       │   │                         #   only block-0 — diving into any other block exercises the
-│       │   │                         #   graph/micro/error fallback path deliberately (micro-at-
-│       │   │                         #   stress-scale is its own future perf question, ROADMAP-
-│       │   │                         #   V2.md's own note, not something this fixture answers)
+│       │   │   ├── sample-graph.ts   # v2.0.1: a per-layerPath dataset (`sampleLayers`,
+│       │   │   │                     #   `Record<string, LayerPayload>`) exercising a real
+│       │   │   │                     #   CIRCULAR cycle, a crossing boundary-style edge, a
+│       │   │   │                     #   risk-free edge, and a loose root file not wrapped in
+│       │   │   │                     #   any block, across layer 0 and at least one deeper
+│       │   │   │                     #   layer. Dev/QA-only since Task 8 — see App.tsx
+│       │   │   └── stress-graph.ts   # generated 30-item/100-edge fixture per layer — Task 7's
+│       │   │                         #   stated pan/zoom/drag/select scale target, now as
+│       │   │                         #   `stressLayers` (Record<string, LayerPayload>).
+│       │   │                         #   Dev/QA-only since Task 8 — see App.tsx
 │       │   │
 │       │   └── assets/fonts/         # self-hosted Space Grotesk + JetBrains Mono, downloaded
 │       │                             #   as their single variable-font woff2 each (Google
@@ -691,10 +814,16 @@ BlockNet/
 │           │                         #   waypoint handle) React Flow needs and jsdom doesn't
 │           │                         #   provide — see setup.ts's own comments for what each one
 │           │                         #   is for and why (confirmed by reading @xyflow/system's
-│           │                         #   source, not assumed). BlockCanvas.test.tsx interactions
+│           │                         #   source, not assumed). LayerCanvas.test.tsx interactions
 │           │                         #   use fireEvent.click, not userEvent.click — RF's pane/
 │           │                         #   nodes carry native d3-drag/d3-zoom mousedown
-│           │                         #   listeners that throw on jsdom's synthetic events
+│           │                         #   listeners that throw on jsdom's synthetic events.
+│           │                         #   Test files mirror src/ 1:1 for every component named
+│           │                         #   above (LayerCanvas, FloorPicker, InterLayerArrows,
+│           │                         #   DocStackCard, DocStackPopover, layer-layout, GraphView,
+│           │                         #   App, etc.) — the retired BlockCanvas/FileCanvas/
+│           │                         #   BlockNode/file-layout/layout test files are deleted,
+│           │                         #   not left stale alongside their superseding counterparts
 │           └── setup.ts
 │
 └── design_handoff_blocknet_extension/   # reference only — KEEP-surfaces per its README

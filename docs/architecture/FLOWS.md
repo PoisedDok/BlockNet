@@ -1,10 +1,12 @@
 # Architecture — End-to-End Flows
 
-Five flows cover every way data moves through the system as of v2.0. The first four were v1's
+Four flows cover every way data moves through the system as of v2.0.1. The first four were v1's
 whole scope ("if a new feature needs a fifth, it doesn't belong in v1" — that line is now
-history, not a live constraint: v2.0's micro view earned flow 5 by proving the macro layer
-true and fast first, per `docs/planning/ROADMAP-V2.md`'s own promotion order). A v2.1+ feature
-needing a sixth still belongs in its own layer's turn, not bolted onto an unrelated flow here.
+history, not a live constraint: v2.0's original micro view earned a fifth flow by proving the
+macro layer true and fast first, and v2.0.1's unified layer model then absorbed that fifth flow
+plus a sixth back into flow 1's bootstrap and one generalized "Layer navigation" flow below, per
+`docs/planning/ROADMAP-V2.md`'s own promotion order). A v2.1+ feature needing a fifth again still
+belongs in its own layer's turn, not bolted onto an unrelated flow here.
 
 ## 1. Cold analyze (first time a repo is opened)
 
@@ -29,7 +31,7 @@ sequenceDiagram
     Ext->>Ext: commands/show-architecture.ts's state.ts: getPositions() from workspaceState (sparse, empty on first-ever open)
     Ext-->>Panel: postMessage layout/restore
     Panel-->>WV: layout/restore
-    WV->>WV: App.tsx's LiveApp stores positions in useState (not yet rendered — no graph/macro yet)
+    WV->>WV: App.tsx's LiveApp stores positions in useState (not yet rendered — no layer data yet)
     Ext->>Runner: analyze(workspaceRoot)
     Runner->>Worker: fork + send({rootDir, cacheDir})
     Worker-->>Runner: progress(blocks, 1/4) ... (edges, 2/4) ... (risks, 3/4) ... (cache, 4/4)
@@ -41,8 +43,19 @@ sequenceDiagram
     Ext->>Ext: git.ts: getDirtyFiles(rootDir); dirty-blocks.ts: dirtyBlockIds(blocks, dirtyFiles) — augments each block with `dirty` (Task 9, STATE-OWNERSHIP.md: queried live, never cached)
     Ext-->>Panel: postMessage graph/macro (nodes: WebviewBlockNode[]), risks/update
     Panel-->>WV: graph/macro, risks/update
-    WV->>WV: layout.ts computes dagre; camera-store.ts layers layout/restore's\npositions over it for any id present there
-    WV-->>Dev: BlockCanvas renders
+    WV->>WV: v2.0.1: graph/macro's own payload is NOT rendered — its arrival is the signal\nto issue graph/layer/request({layerPath: currentLayerPathRef.current}), which on\na cold open is '' (root, the ref's initial value)
+    WV->>Panel: postMessage graph/layer/request {layerPath: ''}
+    Panel->>Ext: dispatch (onLayerRequest callback)
+    Ext->>Runner: runLayer({rootDir, cacheDir, layerPath: ''}) — independent generation\ncounter from macro's own (PROTOCOL.md)
+    Runner->>Worker: fork + send({mode:'layer', rootDir, cacheDir, layerPath: ''})
+    Worker->>Worker: analyze-layer.ts: readCache() → itemsForLayer('') (mixes block-aggregate\nand plain-folder/file items — the layer-0 boundary computation, ROADMAP-V2.md's\nunified layer model) → resolveLayerConnections() → groupDocFiles()
+    Worker-->>Runner: send({type:'layer-result', layer: LayerGraphResult})
+    Runner->>Ext: LayerOutcome success
+    Ext->>Ext: git.ts + dirty-blocks.ts augment items with `dirty` (folder: path-prefix;\nfile: exact path; doc stack: any constituent file)
+    Ext-->>Panel: postMessage graph/layer {layerPath:'', items: WebviewLayerItem[], edges, arrows}
+    Panel-->>WV: graph/layer
+    WV->>WV: GraphView's initial-load guard seeds shownData (React's "adjust state\nduring render" pattern, self-limiting); layer-layout.ts computes the layout,\ncamera-store.ts layers layout/restore's positions over it for any id present there
+    WV-->>Dev: LayerCanvas renders layer 0 (blocks, plain folders, and loose files mixed together)
 ```
 
 ## 2. Incremental re-analyze (developer saves a file)
@@ -55,6 +68,7 @@ sequenceDiagram
     participant Runner as analysis-runner.ts
     participant Worker as core: ipc-worker.ts (forked)
     participant Ext as extension.ts
+    participant Panel as panel.ts
     participant WV as webview
 
     Dev->>FS: save file.ts (× N within the debounce window)
@@ -68,8 +82,15 @@ sequenceDiagram
     Runner->>Runner: if G is still the latest generation, forward;\nif a newer run superseded it, discard silently
     Runner->>Ext: GraphResult
     Ext->>Ext: git.ts + dirty-blocks.ts re-augment blocks with `dirty` (same as flow 1 — queried fresh on every push, not just cold open)
-    Ext-->>WV: postMessage graph/macro, risks/update
-    WV->>WV: graph-store diff-merges by id; React re-renders\nonly the changed nodes/edges
+    Ext-->>Panel: postMessage graph/macro, risks/update
+    Panel-->>WV: graph/macro, risks/update
+    WV->>WV: graph/macro's arrival re-triggers graph/layer/request — critically, for\nwhatever layerPath is CURRENT (App.tsx's currentLayerPathRef, updated on every\nlayer navigation GraphView issues), not hardcoded to root. A save while the\nuser is several layers deep must refresh what they're actually looking at —\nGraphView only ever applies a graph/layer response whose layerPath matches its\nown current or in-flight layer, so re-requesting root unconditionally would\nleave a deep layer showing stale pre-edit data until the user manually\nbacked all the way out and back in (a real gap found and fixed while\nreconciling this flow against the shipped code, not a hypothetical)
+    WV->>Panel: postMessage graph/layer/request {layerPath: <current>}
+    Panel->>Ext: dispatch (onLayerRequest callback)
+    Note over WV,Ext: same round trip as flow 1's tail, and flow 4's — one mechanism,\nanswering "what does layer X look like right now"
+    Ext-->>Panel: postMessage graph/layer (fresh items/edges/arrows for that same layer)
+    Panel-->>WV: graph/layer
+    WV->>WV: LayerCanvas re-renders in place — React's own keyed reconciliation handles\nthe diff, no explicit merge step needed
 ```
 
 ### 2a. Why debounce + generation tagging, not a queue
@@ -90,7 +111,7 @@ The config-change case (`tsconfig.json`, `package.json`) is not incremental —
 full-scan path (still debounced and generation-tagged the same way). Same function, same
 worker, different `AnalyzeOptions`.
 
-**Implementation note (Task 5, 2026-07-19, reconfirmed unchanged through Task 8):** `analyze()`
+**Implementation note (Task 5, 2026-07-19, reconfirmed unchanged through v2.0.1):** `analyze()`
 does not actually read `changedFiles` — as built, `cache/invalidate.ts` re-derives the dirty
 set itself by diffing a freshly-hashed `CacheManifest` against the previous one
 (docs/decisions/0008), rather than trusting the caller's hint. The outcome this diagram
@@ -100,6 +121,16 @@ as a perf optimization (skip hashing the full tree) is not planned work — not 
 docs/planning/TASKS-V1.md or ROADMAP-V2.md — so it isn't tracked as a pending decision here;
 if it becomes worth doing, it needs its own ADR (a real behavior change to what gets hashed),
 not a note in this flow doc.
+
+**The layer re-fetch this triggers (the "WV->>WV" step above) forks its own worker, separate
+from the macro re-analysis worker just described** — `analyzeLayer()` reads the cache the macro
+run just wrote, it doesn't recompute analysis itself, but it still crosses the process boundary
+again (ADR-0011) exactly as any other layer request does (see flow 3). This means a single save
+can fork two short-lived workers in quick succession (macro re-analysis, then the layer refresh
+it triggers) — accepted, not optimized: both are the same "on-save, not on-keystroke" frequency
+class ADR-0011 was written against, and the layer-refresh fork specifically is flagged in
+PROTOCOL.md's "Layer requests" section as a live-verification checkpoint, not resolved
+speculatively here.
 
 ## 3. Open-in-editor (risk evidence click)
 
@@ -120,118 +151,82 @@ sequenceDiagram
 ```
 
 Task 9's original plan was also a block-card ⤢ triggering the identical `open/file` flow. Not
-built: a block is always a directory (`BlockNode.path`), never a single file — there's no
-canonical file for a block-level ⤢ to target without a drill-down step v1 doesn't have (the
-design-handoff prototype confirms this: its ⤢ affordance only ever exists on file-level
-cards). As of v2.0, `FileCard`'s ⤢ (`extension/webview/src/flow/FileCard.tsx`, flow 5 below)
-is exactly that file-level trigger — a second sender into this same flow, `commands/
-open-file.ts` unchanged. `open/diff` (`vscode.diff` working-tree vs HEAD) is defined in the
-protocol but still has no UI sender anywhere, block or file level.
+built at v2.0 launch: a block is always a directory (`BlockNode.path`), never a single file —
+there's no canonical file for a block-level ⤢ to target without a drill-down step. As of the
+unified layer model, `FileCard`'s ⤢ (mounted inside `LayerCanvas.tsx`'s file-kind nodes) and
+`DocStackPopover`'s own file rows are exactly that file-level trigger — further senders into
+this same flow, `commands/open-file.ts` unchanged (`handleOpenFile(rootDir, fileId, line?)`
+handles every sender identically, since each already posts a real repo-relative path). `open/
+diff` (`vscode.diff` working-tree vs HEAD) is defined in the protocol but still has no UI sender
+anywhere.
 
-## 4. Layout persistence (drag a node, or bend an edge — ROADMAP-V2.md)
+## 4. Layer navigation (dive, floor-picker jump, or inter-layer arrow — ROADMAP-V2.md's v2.0.1)
 
-```mermaid
-sequenceDiagram
-    actor Dev
-    participant WV as webview: BlockCanvas / RiskEdge
-    participant Cam as camera-store.ts
-    participant Panel as panel.ts
-    participant State as state.ts
-
-    Dev->>WV: drag a block card, OR drag an edge's waypoint handle
-    WV->>Cam: movePosition(id, pos) OR moveWaypoints(edgeId, waypoints[])\n(waypoints is always the FULL replacement array for that edge, never a single\npoint to merge — an empty array removes the override entirely, same\nabsent-id-falls-through-to-computed-default contract as positions;\noptimistic, instant, local only)
-    Cam->>Cam: debounce ~300ms (ONE shared timer for both maps — a position\ndrag and a waypoint drag close together in time coalesce into one send)
-    Cam->>Panel: postMessage layout/persist {positions, edgeWaypoints}
-    Panel->>State: onLayoutPersist(positions, edgeWaypoints) → setPositions(...) +\nsetEdgeWaypoints(context.workspaceState, edgeWaypoints)
-    Note over WV,State: on next panel open, commands/show-architecture.ts reads state.ts\nand awaits panel.whenReady() before pushing layout/restore BEFORE\ngraph/macro — first paint has no flash. panel.ts doesn't import state.ts\ndirectly — onLayoutPersist is a callback show-architecture.ts supplies at\ncreateOrReveal() time, so panel.ts stays a generic message-lifecycle shell
-```
-
-An edge's waypoint handle renders via React Flow's `EdgeLabelRenderer` (a shared HTML overlay
-above all edges' SVG, not an SVG element inside the edge's own group — an inline SVG circle was
-tried first and found, live, to lose hit-testing to unrelated edges' own wide interaction
-strokes) and counter-scales by `1/zoom` so it stays a constant, grabbable size regardless of how
-zoomed out the canvas is (`PROTOCOL.md`'s "Draggable edge waypoints" section has the full
-mechanism, including two real bugs found via live Playwright testing during this feature's own
-build and how each was fixed).
-
-## 5. Micro dive-in (block double-click) — v2.0
+Every way a user changes what layer they're looking at — double-clicking a folder card, clicking
+an ancestor slab in the floor-picker, or clicking a clickable inter-layer arrow — resolves to the
+SAME round trip: `GraphView.tsx`'s `navigateTo(path, name, nextStack)` computes the FULL
+resulting navigation stack up front (a dive appends one entry; a floor-picker jump truncates to
+an ancestor index; an arrow reconstructs the whole ancestor chain by splitting the off-screen
+target's own path into progressive prefixes, since it can point at a completely unrelated
+branch, not just one level up or down from here), then issues one `graph/layer/request`.
 
 ```mermaid
 sequenceDiagram
     actor Dev
-    participant WV as webview: GraphView/BlockCanvas
+    participant WV as webview: GraphView / LayerCanvas / FloorPicker / InterLayerArrows
     participant Panel as panel.ts
-    participant Cmd as commands/show-architecture.ts
+    participant Ext as extension.ts (triggerLayerAnalysis)
     participant Runner as analysis-runner.ts
-    participant Worker as core: ipc-worker.ts (forked, mode:'micro')
+    participant Worker as core: ipc-worker.ts (forked, mode:'layer')
 
-    Dev->>WV: double-click a block card
-    WV->>WV: GraphView.handleDive(blockId) — phase:'diving', shows a loading indicator;\nmacro layer stays fully visible and interactive (no optimistic cross-fade — a real\nhost round-trip is in flight, "never fake it")
-    WV->>Panel: postMessage graph/micro/request {blockId}
-    Panel->>Cmd: dispatch (onMicroRequest callback, wired at createOrReveal)
-    Cmd->>Runner: runMicro({rootDir, cacheDir, blockId}) — independent generation\ncounter from macro's own (PROTOCOL.md)
-    Runner->>Worker: fork + send({mode:'micro', rootDir, cacheDir, blockId})
-    Worker->>Worker: analyze-micro.ts: readCache() → one whole-repo walkRealFiles(rootDir)\nfiltered by resolveBlock() to this block's files (matches computeBlockShape()'s own\nfileCount exactly — a per-block-scoped walk diverged on nested blocks and\ncross-block symlinks, both found via real-repo verification) + real LOC (skipped,\ndegrades to 0, for anything over 2MB) + re-run findCyclicFileEdges() over the\ncached fileEdges — no dependency-cruiser re-cruise
-    alt cache has this block
-        Worker-->>Runner: send({type:'micro-result', micro: MicroGraphResult})
-        Runner->>Cmd: MicroOutcome success
-        Cmd->>Cmd: git.ts: getDirtyFiles(rootDir) — direct membership, not\ndirty-blocks.ts's path-prefix aggregation (file granularity is exact)
-        Cmd-->>Panel: postMessage graph/micro {blockId, files: WebviewMicroFileNode[], edges}
-    else no cache yet, or blockId no longer in the cached snapshot
+    Dev->>WV: double-click a folder card, OR click a floor-picker slab, OR click an\ninter-layer arrow
+    WV->>WV: navigateTo computes nextStack; phase:'diving' — current layer stays\nfully visible and interactive (no optimistic cross-fade — a real host\nround-trip is in flight, "never fake it")
+    WV->>Panel: postMessage graph/layer/request {layerPath}
+    Panel->>Ext: dispatch (onLayerRequest callback, wired at createOrReveal)
+    Ext->>Runner: runLayer({rootDir, cacheDir, layerPath}) — independent generation\ncounter from macro's own (PROTOCOL.md)
+    Runner->>Worker: fork + send({mode:'layer', rootDir, cacheDir, layerPath})
+    Worker->>Worker: analyze-layer.ts: readCache() → itemsForLayer(layerPath) (mixes\nblock-aggregate and plain-folder/file items at THIS depth, honoring AD-5's\nnested-block compaction) → resolveLayerConnections(fileEdges, items, layerPath)\n(intra-layer edges + inter-layer arrows, direction from depth comparison) →\ngroupDocFiles(items, layerPath)
+    alt cache exists on disk (layerPath resolving to zero items is still success — an empty\nlayer, not an error, itemsForLayer just returns an empty boundary set)
+        Worker-->>Runner: send({type:'layer-result', layer: LayerGraphResult})
+        Runner->>Ext: LayerOutcome success
+        Ext->>Ext: git.ts: getDirtyFiles(rootDir); dirty-blocks.ts + exact-path/\nconstituent-file membership augment items with `dirty`
+        Ext-->>Panel: postMessage graph/layer {layerPath, items: WebviewLayerItem[], edges, arrows}
+    else no cache on disk yet
         Worker-->>Runner: send({type:'error', message})
-        Runner->>Cmd: MicroOutcome error
-        Cmd-->>Panel: postMessage graph/micro/error {blockId, message}
+        Runner->>Ext: LayerOutcome error
+        Ext-->>Panel: postMessage graph/layer/error {layerPath, message}
     end
-    Panel-->>WV: graph/micro or graph/micro/error
-    WV->>WV: GraphView compares the response's blockId against its own local\npendingBlockId (discards a late response for a block the user has since\nnavigated away from) — success: mounts FileCanvas, cross-fades in\n(~0.45–0.5s); error: stays on macro, shows an inline banner (~4s)
-    WV-->>Dev: file-level graph renders, or a friendly inline notice
+    Panel-->>WV: graph/layer or graph/layer/error
+    WV->>WV: GraphView compares the response's layerPath against its own local\npendingLayer.path (discards a late response for a layer the user has since\nnavigated away from) — success: mounts the incoming LayerCanvas, cross-fades\nin (~0.45–0.5s), then commits the precomputed nextStack; error: stays on the\ncurrent layer, shows an inline banner (~4s)
+    WV-->>Dev: the new layer renders — same residents regardless of how it was\nreached (dive, jump, or arrow), since itemsForLayer(layerPath) is a pure\nfunction of the path alone
 ```
 
 Every fork here is one-shot (same "fork → one message in → one message out → kill" lifecycle
-as the macro flow, `PROCESS-BOUNDARY.md`) and gated by its own `isLatestMicro()` generation
-counter — see `PROTOCOL.md`'s "Micro (file-level) requests" section for the full dual-gate (and
-webview-side third layer) race-safety argument, the same class of stale-post bug Task 9's
-review already found and fixed once for `graph/macro`. `analyze-micro.ts` never re-runs
-dependency-cruiser — it's a read of the last macro run's cache (`cache/store.ts`'s persisted
-`fileEdges`) plus one whole-repo `walkRealFiles` call filtered to the requested block, which is
-what keeps a double-click cheap relative to a full re-analysis (a full re-cruise of
-`AetherArenaV2`'s real ~6,500-file repo takes ~5s; the equivalent micro request's walk-and-
-filter takes well under a second for every real block measured, including its ~5,300-file
-`open-connector` block) — cheap relative to the alternative, not literally independent of
-total repo size, since the walk itself does scan every real file, once, per request.
+as the macro flow, `PROCESS-BOUNDARY.md`) and gated by its own `isLatestLayer()` generation
+counter — see `PROTOCOL.md`'s "Layer requests" section for the full dual-gate (host-side) and
+webview-side third layer (`pendingLayer.path` comparison) race-safety argument, the same class
+of stale-post bug Task 9's review already found and fixed once for `graph/macro`.
+`analyze-layer.ts` never re-runs dependency-cruiser — it's a read of the last macro run's cache
+(`cache/store.ts`'s persisted `fileEdges`) plus a fresh `itemsForLayer` boundary computation for
+the requested path, which is what keeps a navigation cheap relative to a full re-analysis.
 
-## 6. File-level layout persistence (drag a file card, or bend a file edge — ROADMAP-V2.md)
+**Correctness guarantee, not just a convenience**: because every navigation path (dive,
+floor-picker jump, arrow) funnels through the identical `graph/layer/request({layerPath})` →
+`itemsForLayer(layerPath)` computation, arriving at a given layer always shows the same
+residents and the same reconstructed ancestor chain no matter how it was reached — there is no
+separate "what does this arrow's destination look like" code path that could drift from "what
+does drilling there normally show." One known, accepted cosmetic gap: an inter-layer arrow's
+client-side ancestor-chain reconstruction (`GraphView.tsx`'s `handleArrowNavigate`, a naive path
+split) doesn't know about AD-5's block-compaction, so a target inside a compacted nested block
+can show one extra, technically-redundant breadcrumb entry for an intermediate segment that
+isn't really its own navigable layer — every entry in the chain still resolves correctly on its
+own (`itemsForLayer` works for any path), so the worst case is a cosmetically imperfect
+breadcrumb, never a broken navigation or wrong set of residents.
 
-```mermaid
-sequenceDiagram
-    actor Dev
-    participant WV as webview: FileCanvas / GraphView
-    participant Cam as camera-store.ts (second instance)
-    participant Panel as panel.ts
-    participant State as state.ts
-
-    Dev->>WV: drag a file card, OR drag a file edge's waypoint handle (micro view)
-    WV->>Cam: movePosition(id, pos) OR moveWaypoints(edgeId, waypoints[])\n(optimistic, instant, local only)
-    Cam->>Cam: debounce ~300ms (its own timer, independent of the macro\ninstance's — the two hooks never share a debounce)
-    Cam->>Panel: postMessage layout/file-persist {filePositions, fileEdgeWaypoints}
-    Panel->>State: onFileLayoutPersist(filePositions, fileEdgeWaypoints) →\nsetFilePositions(...) + setFileEdgeWaypoints(context.workspaceState, ...)
-    Note over WV,State: same layout/restore-before-graph/macro ordering guarantee applies to\nthe file-level pair once a micro dive re-requests them — no separate\nrestore message exists for file-level layout; it rides the same\nlayout/restore payload as the macro maps
-```
-
-This is flow 4's exact mechanism, scoped to the micro (per-block, file-level) view rather than
-the macro (block-level) one — not a different mechanism, a second instance of it.
-`GraphView.tsx` owns a SECOND, independent `useCameraStore` call (distinct from
-`BlockCanvas.tsx`'s own internal instance) specifically because `FileCanvas` remounts fresh on
-every dive; living at `GraphView` level instead means a drag made during one dive is still
-current React state the very next dive reads, rather than resetting to whatever
-`initialFilePositions` prop was current at that earlier mount. Its `persist` callback posts
-`layout/file-persist` (`filePositions`, `fileEdgeWaypoints`) instead of the macro
-`layout/persist` (`positions`, `edgeWaypoints`) — a distinct message shape/workspaceState-key
-pair (`protocol.ts`), not two more fields folded onto the macro message, so the two hooks'
-debounce timers stay fully independent and neither's persist can be mistaken for the other's by
-the host. `panel.ts` dispatches it to an `onFileLayoutPersist` callback wired at
-`createOrReveal()` time, exactly parallel to `onLayoutPersist`; `commands/show-architecture.ts`
-supplies that callback, calling `state.ts`'s `setFilePositions` and `setFileEdgeWaypoints` — two
-separate `memento.update()` writes to their own workspaceState keys
-(`blocknet.filePositions`, `blocknet.fileEdgeWaypoints`), same accepted non-atomicity as the
-macro pair (view state, not import truth — a lost write just means a drag needs redoing).
+Positions and edge waypoints persist across every navigation via the ONE `useCameraStore`
+instance `GraphView.tsx` owns for the panel's whole session (`PROTOCOL.md`'s "State keying,
+generalized") — a drag made while visiting a layer is still current React state the next time
+that same layer is visited within the session, and reaches `state.ts`'s
+`blocknet.positions`/`blocknet.edgeWaypoints` workspaceState keys via the same debounced
+`layout/persist` send described in `PROTOCOL.md`'s "Draggable, multi-point edge waypoints"
+section — unchanged by which layer is currently mounted.
