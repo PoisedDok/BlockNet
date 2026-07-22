@@ -1,0 +1,50 @@
+.bn-inter-layer-arrows {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -26px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  /* React Flow node wrappers don't reserve extra layout space for a child that overflows their
+     own bounds — dagre's fixed per-node height (layer-layout.ts) doesn't know about this row
+     either. Accepted, not fixed: real dagre spacing (ranksep/nodesep) between nodes leaves
+     enough margin in practice that a ~24px badge row rarely collides with a neighbor — a known,
+     unmeasured cosmetic risk, same posture as ROADMAP-V2.md's own noted arrow-count-at-scale
+     risk, not silently ignored. */
+  pointer-events: none;
+}
+
+.bn-inter-layer-arrow {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 10px var(--bn-font-mono);
+  color: var(--bn-text-muted);
+  background: var(--bn-card-bg);
+  border: 1px solid var(--bn-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.bn-inter-layer-arrow:hover {
+  color: var(--bn-text-primary);
+  border-color: var(--bn-border-selected);
+}
+
+.bn-inter-layer-arrow:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, var(--bn-border-selected));
+  outline-offset: 1px;
+}
+
+.bn-inter-layer-arrow[data-risk] {
+  color: var(--bn-risk-strong);
+  border-color: var(--bn-risk-border);
+  background: var(--bn-risk-soft);
+}
