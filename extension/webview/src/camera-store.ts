@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Position } from './flow/layout.js';
+import type { Position } from '../../src/shared/protocol.js';
 import { postToHost } from './host-bridge.js';
 
 const PERSIST_DEBOUNCE_MS = 300;
