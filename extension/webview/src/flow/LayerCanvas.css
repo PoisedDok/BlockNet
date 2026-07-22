@@ -1,0 +1,20 @@
+.bn-canvas-root {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+.bn-canvas-root .react-flow {
+  background: var(--bn-canvas-bg);
+}
+
+.react-flow__background pattern circle {
+  opacity: 0.55;
+}
+
+/* Selection/lasso and connection-line affordances are dead code paths in a read-only graph
+ * (nodesConnectable={false}, selectionOnDrag={false}) — hide their default chrome rather
+ * than leave visual promises the app doesn't keep. */
+.react-flow__selection {
+  display: none;
+}
